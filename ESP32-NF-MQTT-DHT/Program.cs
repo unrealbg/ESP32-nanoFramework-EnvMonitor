@@ -63,8 +63,20 @@ namespace ESP32_NF_MQTT_DHT
         {
             while (true)
             {
-                long totalMemory = GC.Run(true);
-                LogHelper.LogInformation("[MemoryMonitor] Total unused memory: " + totalMemory + " bytes");
+                long totalMemory = GC.Run(false);
+                long afterGC = GC.Run(true);
+                
+                LogHelper.LogInformation($"[MemoryMonitor] Free: {totalMemory} bytes, After GC: {afterGC} bytes, Recovered: {totalMemory - afterGC} bytes");
+                
+                // Warning if memory is low
+                if (afterGC < 30000)
+                {
+                    LogHelper.LogWarning($"[MemoryMonitor] LOW MEMORY: {afterGC} bytes remaining!");
+                }
+                else if (afterGC < 50000)
+                {
+                    LogHelper.LogWarning($"[MemoryMonitor] Memory getting low: {afterGC} bytes");
+                }
 
                 Thread.Sleep(60000);
             }
