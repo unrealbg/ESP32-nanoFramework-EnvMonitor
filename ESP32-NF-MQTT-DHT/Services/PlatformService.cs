@@ -20,7 +20,53 @@ namespace ESP32_NF_MQTT_DHT.Services
         /// <returns>True if web server is supported, otherwise false.</returns>
         public bool SupportsWebServer()
         {
-            return this.PlatformName == AppConfiguration.Platform.SupportedWebServerPlatform && this.HasSufficientMemory(AppConfiguration.Platform.WebServerRequiredMemory);
+            var platformName = this.PlatformName;
+            var requiredMemory = AppConfiguration.Platform.WebServerRequiredMemory;
+            var availableMemory = this.GetAvailableMemory();
+            
+            Helpers.LogHelper.LogInformation($"[WebServer Check] Platform: '{platformName}'");
+            Helpers.LogHelper.LogInformation($"[WebServer Check] Memory: {availableMemory} bytes (Required: {requiredMemory})");
+            
+            bool platformSupported = IsSupportedPlatform(platformName);
+            bool memorySupported = this.HasSufficientMemory(requiredMemory);
+            
+            Helpers.LogHelper.LogInformation($"[WebServer Check] Result - Platform: {platformSupported}, Memory: {memorySupported}");
+            
+            return platformSupported && memorySupported;
+        }
+        
+        /// <summary>
+        /// Checks if the given platform name is in the list of supported platforms.
+        /// </summary>
+        /// <param name="platformName">The platform name to check.</param>
+        /// <returns>True if platform is supported, otherwise false.</returns>
+        private bool IsSupportedPlatform(string platformName)
+        {
+            if (string.IsNullOrEmpty(platformName))
+                return false;
+            
+            if (platformName == AppConfiguration.Platform.SupportedWebServerPlatform)
+                return true;
+            
+            var alternatives = AppConfiguration.Platform.AlternativePlatformNames;
+            for (int i = 0; i < alternatives.Length; i++)
+            {
+                if (platformName == alternatives[i])
+                {
+                    Helpers.LogHelper.LogInformation($"[WebServer Check] Platform '{platformName}' matched alternative '{alternatives[i]}'");
+                    return true;
+                }
+            }
+            
+            var upperPlatform = platformName.ToUpper();
+            if (upperPlatform.Contains("ESP32") && (upperPlatform.Contains("S3") || upperPlatform.Contains("_S3") || upperPlatform.Contains("-S3")))
+            {
+                Helpers.LogHelper.LogInformation($"[WebServer Check] Platform '{platformName}' matched via pattern (ESP32*S3)");
+                return true;
+            }
+            
+            Helpers.LogHelper.LogWarning($"[WebServer Check] Platform '{platformName}' not recognized as WebServer-capable");
+            return false;
         }
 
         /// <summary>
@@ -29,7 +75,7 @@ namespace ESP32_NF_MQTT_DHT.Services
         /// <returns>Available memory in bytes.</returns>
         public long GetAvailableMemory()
         {
-            return GC.Run(false);
+            return GC.Run(true);
         }
 
         /// <summary>
