@@ -100,6 +100,15 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             if (_platformService.SupportsWebServer())
             {
+                var availableMemory = _platformService.GetAvailableMemory();
+                var requiredMemory = ESP32_NF_MQTT_DHT.Configuration.AppConfiguration.Platform.WebServerRequiredMemory;
+
+                if (availableMemory < requiredMemory)
+                {
+                    LogHelper.LogWarning($"Insufficient memory for WebServer. Required: {requiredMemory}, Available: {availableMemory}. Skipping web server startup.");
+                    return;
+                }
+
                 LogHelper.LogInformation("Starting WebServer service...");
                 _webServerService.Start();
                 LogHelper.LogInformation("WebServer service started.");
