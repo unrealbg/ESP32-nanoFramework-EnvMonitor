@@ -47,9 +47,9 @@
                             break;
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        /* ignore invalid path exceptions */
+                        LogHelper.LogWarning($"Failed to check path '{candidates[i]}': {ex.Message}");
                     }
                 }
 
@@ -83,9 +83,9 @@
                                 break;
                             }
                         }
-                        catch
+                        catch (Exception ex)
                         {
-                            // ignored
+                            LogHelper.LogWarning($"Failed to check certificate {total} issuer/subject: {ex.Message}");
                         }
 
                         if (selected == null)
@@ -145,9 +145,9 @@
                                     break;
                                 }
                             }
-                            catch
+                            catch (Exception ex)
                             {
-                                // ignored
+                                LogHelper.LogWarning($"Failed to check embedded certificate {total} issuer/subject: {ex.Message}");
                             }
 
                             if (selected == null)
@@ -253,15 +253,24 @@
         {
             LogHelper.LogInformation("Validating system requirements...");
             
-            var availableMemory = _platformService.GetAvailableMemory();
+            var availableMemory = nanoFramework.Runtime.Native.GC.Run(true);
             var requiredMemory = StartupConfiguration.RequiredMemory;
             
             if (!_platformService.HasSufficientMemory(requiredMemory))
             {
-                throw new InsufficientMemoryException(requiredMemory, availableMemory);
+                if (availableMemory < 30000)
+                {
+                    throw new InsufficientMemoryException(requiredMemory, availableMemory);
+                }
+                else
+                {
+                    LogHelper.LogWarning($"Memory below recommended level but sufficient to continue. Memory: {availableMemory}/{requiredMemory} bytes");
+                }
             }
-            
-            LogHelper.LogInformation($"System requirements validated. Memory: {availableMemory}/{requiredMemory} bytes");
+            else
+            {
+                LogHelper.LogInformation($"System requirements validated. Memory: {availableMemory}/{requiredMemory} bytes");
+            }
         }
 
         private void EstablishConnection()
@@ -296,9 +305,18 @@
 
         private void LogPlatformInfo()
         {
-            LogHelper.LogInformation($"Platform: {_platformService.PlatformName}");
-            LogHelper.LogInformation($"Available Memory: {_platformService.GetAvailableMemory()} bytes");
-            LogHelper.LogInformation($"WebServer Support: {_platformService.SupportsWebServer()}");
+            var platformName = _platformService.PlatformName;
+            var availableMemory = _platformService.GetAvailableMemory();
+            var supportsWebServer = _platformService.SupportsWebServer();
+            
+            LogHelper.LogInformation("=== Platform Information ===");
+            LogHelper.LogInformation($"Platform Name: '{platformName}'");
+            LogHelper.LogInformation($"Platform Version: {nanoFramework.Runtime.Native.SystemInfo.Version}");
+            LogHelper.LogInformation($"Available Memory: {availableMemory} bytes ({availableMemory / 1024} KB)");
+            LogHelper.LogInformation($"WebServer Support: {supportsWebServer}");
+            LogHelper.LogInformation($"Expected Platform for WebServer: '{AppConfiguration.Platform.SupportedWebServerPlatform}'");
+            LogHelper.LogInformation($"Required Memory for WebServer: {AppConfiguration.Platform.WebServerRequiredMemory} bytes");
+            LogHelper.LogInformation("===========================");
         }
     }
 }
