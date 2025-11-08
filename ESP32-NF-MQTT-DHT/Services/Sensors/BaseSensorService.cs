@@ -58,7 +58,7 @@
         public virtual void Start()
         {
             _running = true;
-            _readTimer = new Timer(this.ReadCallback, null, 0, ReadInterval);
+            _readTimer = new Timer(this.ReadCallback, null, 0, ReadIntervalMs);
         }
 
         /// <summary>
@@ -104,7 +104,7 @@
                 LogHelper.LogError($"Error reading sensor data in {this.GetSensorType()}: {ex.Message}");
                 this.SetErrorValues();
 
-                _readTimer.Change(ErrorInterval, ReadInterval);
+                _readTimer.Change(ErrorIntervalMs, ReadIntervalMs);
             }
         }
     }

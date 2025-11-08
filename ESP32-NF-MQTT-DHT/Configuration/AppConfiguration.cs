@@ -1,4 +1,4 @@
-namespace ESP32_NF_MQTT_DHT.Configuration
+﻿namespace ESP32_NF_MQTT_DHT.Configuration
 {
     /// <summary>
     /// Centralized configuration provider for all application settings.
@@ -19,9 +19,20 @@ namespace ESP32_NF_MQTT_DHT.Configuration
         /// </summary>
         public static class Platform
         {
-            public const long WebServerRequiredMemory = 100000;
-            public const long StartupRequiredMemory = 100000;
+         
+            public const long WebServerRequiredMemory = 45000;
+            public const long StartupRequiredMemory = 40000;
+            
             public const string SupportedWebServerPlatform = "ESP32_S3";
+            
+            public static readonly string[] AlternativePlatformNames = new string[]
+            {
+                "ESP32-S3",      // With dash
+                "ESP32_S3",      // With underscore (primary) ✅ CONFIRMED from logs
+                "ESP32S3",       // No separator
+                "KALUGA_1",      // ESP32-S3 dev board
+                "ESP32_S3_ALL"   // Possible variant
+            };
         }
 
         /// <summary>

@@ -15,16 +15,21 @@
     /// <summary>
     /// Service for managing network connections, including connecting to Wi-Fi and checking connection status.
     /// </summary>
-    public class ConnectionService : IConnectionService
+    public class ConnectionService : IConnectionService, IDisposable
     {
         private const int MAX_CONNECTION_ATTEMPTS = 10;
         private const int RECONNECT_DELAY_MS = 10000;
         private const int CONNECTION_CHECK_INTERVAL_MS = 200;
+        private const int SNTP_SYNC_TIMEOUT_MS = 20000;
+        private const int SNTP_CHECK_INTERVAL_MS = 1000;
 
         private readonly WifiAdapter _wifiAdapter;
         private readonly object _connectionLock = new object();
+        private readonly object _eventLock = new object();
+        
         private bool _hasConnectedSuccessfully = false;
         private bool _isConnectionInProgress = false;
+        private bool _disposed = false;
         private string _ipAddress;
 
         /// <summary>
@@ -39,6 +44,7 @@
             catch (Exception ex)
             {
                 LogHelper.LogError($"Failed to initialize WiFi adapter: {ex.Message}");
+                throw;
             }
         }
 
@@ -59,6 +65,7 @@
         {
             get
             {
+                ThrowIfDisposed();
                 return this.IsAlreadyConnected(out _);
             }
         }
@@ -82,6 +89,8 @@
         /// </summary>
         public void Connect()
         {
+            ThrowIfDisposed();
+            
             if (_wifiAdapter == null)
             {
                 LogHelper.LogError("Cannot connect: WiFi adapter not available");
@@ -99,73 +108,93 @@
                 _isConnectionInProgress = true;
             }
 
-            while (!this.IsAlreadyConnected(out _))
+            try
             {
-                int attemptCount = 0;
-                bool connected = false;
-
-                while (!this.IsAlreadyConnected(out string ipAddress) && attemptCount < MAX_CONNECTION_ATTEMPTS)
+                while (!_disposed && !this.IsAlreadyConnected(out _))
                 {
-                    attemptCount++;
-                    LogHelper.LogInformation($"Connecting... [Attempt {attemptCount}/{MAX_CONNECTION_ATTEMPTS}]");
+                    int attemptCount = 0;
+                    bool connected = false;
 
-                    try
+                    while (!_disposed && !this.IsAlreadyConnected(out string ipAddress) && attemptCount < MAX_CONNECTION_ATTEMPTS)
                     {
-                        var result = _wifiAdapter.Connect(SSID, WifiReconnectionKind.Automatic, Password);
+                        attemptCount++;
+                        LogHelper.LogInformation($"Connecting... [Attempt {attemptCount}/{MAX_CONNECTION_ATTEMPTS}]");
 
-                        if (this.TryWaitForConnection(result, out ipAddress))
+                        try
                         {
-                            this.HandleSuccessfulConnection(ipAddress);
-                            connected = true;
-                            break;
+                            var result = _wifiAdapter.Connect(SSID, WifiReconnectionKind.Automatic, Password);
+
+                            if (this.TryWaitForConnection(result, out ipAddress))
+                            {
+                                this.HandleSuccessfulConnection(ipAddress);
+                                connected = true;
+                                break;
+                            }
+
+                            LogHelper.LogWarning($"{this.GetErrorMessage(result.ConnectionStatus)}. Retrying in {RECONNECT_DELAY_MS / 1000} seconds...");
+                        }
+                        catch (Exception ex)
+                        {
+                            LogHelper.LogError($"Connection error: {ex.Message}");
+                            LogService.LogCritical($"Connection error: {ex.Message}", ex);
                         }
 
-                        LogHelper.LogWarning($"{this.GetErrorMessage(result.ConnectionStatus)}. Retrying in {RECONNECT_DELAY_MS / 1000} seconds...");
+                        if (!_disposed)
+                        {
+                            Thread.Sleep(RECONNECT_DELAY_MS);
+                        }
                     }
-                    catch (Exception ex)
+
+                    if (connected || _disposed)
                     {
-                        LogHelper.LogError($"Connection error: {ex.Message}");
-                        LogService.LogCritical($"Socket error: {ex.Message}");
+                        break;
                     }
 
-                    Thread.Sleep(RECONNECT_DELAY_MS);
-                }
+                    if (this.IsAlreadyConnected(out string ip))
+                    {
+                        lock (_connectionLock)
+                        {
+                            _ipAddress = ip;
+                            _isConnectionInProgress = false;
+                        }
 
-                if (connected)
-                {
-                    break;
-                }
+                        if (_hasConnectedSuccessfully)
+                        {
+                            LogHelper.LogInformation($"Connection restored. IP Address: {ip}");
+                            this.RaiseConnectionRestored();
+                        }
+                        else
+                        {
+                            LogHelper.LogInformation($"Connection established after retry. IP Address: {ip}");
+                            _hasConnectedSuccessfully = true;
+                        }
 
-                if (this.IsAlreadyConnected(out string ip))
-                {
-                    lock (_connectionLock)
+                        break;
+                    }
+
+                    LogHelper.LogError($"Failed to connect after {MAX_CONNECTION_ATTEMPTS} attempts. Sleeping for 1 minute before retrying...");
+                    
+                    if (!_disposed)
+                    {
+                        Thread.Sleep(60000);
+                    }
+
+                    if (!_disposed && this.IsAlreadyConnected(out ip))
                     {
                         _ipAddress = ip;
-                        _isConnectionInProgress = false;
-                    }
-
-                    if (_hasConnectedSuccessfully)
-                    {
                         LogHelper.LogInformation($"Connection restored. IP Address: {ip}");
                         this.RaiseConnectionRestored();
+                        lock (_connectionLock)
+                        {
+                            _isConnectionInProgress = false;
+                        }
                     }
-                    else
-                    {
-                        LogHelper.LogInformation($"Connection established after retry. IP Address: {ip}");
-                        _hasConnectedSuccessfully = true;
-                    }
-
-                    break;
                 }
-
-                LogHelper.LogError($"Failed to connect after {MAX_CONNECTION_ATTEMPTS} attempts. Sleeping for 1 minute before retrying...");
-                Thread.Sleep(60000);
-
-                if (this.IsAlreadyConnected(out ip))
+            }
+            finally
+            {
+                lock (_connectionLock)
                 {
-                    _ipAddress = ip;
-                    LogHelper.LogInformation($"Connection restored. IP Address: {ip}");
-                    this.RaiseConnectionRestored();
                     _isConnectionInProgress = false;
                 }
             }
@@ -176,6 +205,8 @@
         /// </summary>
         public void CheckConnection()
         {
+            ThrowIfDisposed();
+            
             if (_isConnectionInProgress)
             {
                 return; // Don't start another connection attempt if one is already in progress
@@ -183,7 +214,11 @@
 
             if (!this.IsAlreadyConnected(out _))
             {
-                _isConnectionInProgress = true;
+                lock (_connectionLock)
+                {
+                    _isConnectionInProgress = true;
+                }
+                
                 this.RaiseConnectionLost();
                 LogHelper.LogWarning("Lost network connection. Attempting to reconnect...");
                 this.Connect();
@@ -196,6 +231,8 @@
         /// <returns>The IP address of the device.</returns>
         public string GetIpAddress()
         {
+            ThrowIfDisposed();
+            
             if (string.IsNullOrEmpty(_ipAddress) || _ipAddress == "0.0.0.0")
             {
                 if (this.IsAlreadyConnected(out string currentIp))
@@ -212,6 +249,35 @@
         }
 
         /// <summary>
+        /// Disposes the connection service and releases resources.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed) return;
+
+            try
+            {
+                _disposed = true;
+                
+                // Clear event handlers to prevent memory leaks
+                lock (_eventLock)
+                {
+                    ConnectionRestored = null;
+                    ConnectionLost = null;
+                }
+                
+                // Note: WifiAdapter doesn't implement IDisposable in nanoFramework
+                // but we set it to null to allow GC
+                
+                LogHelper.LogInformation("ConnectionService disposed.");
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"Error disposing ConnectionService: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Checks if the device is already connected to the network.
         /// </summary>
         /// <param name="ipAddress">The IP address of the device if connected.</param>
@@ -219,6 +285,8 @@
         private bool IsAlreadyConnected(out string ipAddress)
         {
             ipAddress = null;
+
+            if (_disposed) return false;
 
             try
             {
@@ -248,7 +316,7 @@
                 return false;
             }
 
-            for (int i = 0; i < MAX_CONNECTION_ATTEMPTS; i++)
+            for (int i = 0; i < MAX_CONNECTION_ATTEMPTS && !_disposed; i++)
             {
                 if (this.IsAlreadyConnected(out string currentIp))
                 {
@@ -281,44 +349,67 @@
                 this.RaiseConnectionRestored();
             }
 
+            // Sync time via SNTP
+            this.SyncTimeViaSNTP();
+
+            lock (_connectionLock)
+            {
+                _isConnectionInProgress = false;
+            }
+        }
+
+        /// <summary>
+        /// Synchronizes time via SNTP.
+        /// </summary>
+        private void SyncTimeViaSNTP()
+        {
             try
             {
                 if (DateTime.UtcNow.Year < 2020)
                 {
                     LogHelper.LogInformation("Syncing time via SNTP...");
+                    
                     nanoFramework.Networking.Sntp.Server1 = ESP32_NF_MQTT_DHT.Settings.TimeSettings.NtpServer;
+                    
                     // Optional fallback server to improve reliability
-                    try { nanoFramework.Networking.Sntp.Server2 = "time.google.com"; } catch { }
+                    try 
+                    { 
+                        nanoFramework.Networking.Sntp.Server2 = "time.google.com"; 
+                    } 
+                    catch (Exception ex)
+                    {
+                        LogHelper.LogWarning($"Failed to set SNTP Server2: {ex.Message}");
+                    }
 
                     nanoFramework.Networking.Sntp.Start();
 
-                    // Wait up to ~20s for SNTP to set the clock
+                    // Wait for SNTP to set the clock
                     int attempts = 0;
-                    while (attempts < 20 && DateTime.UtcNow.Year < 2020)
+                    int maxAttempts = SNTP_SYNC_TIMEOUT_MS / SNTP_CHECK_INTERVAL_MS;
+                    
+                    while (attempts < maxAttempts && DateTime.UtcNow.Year < 2020 && !_disposed)
                     {
-                        Thread.Sleep(1000);
+                        Thread.Sleep(SNTP_CHECK_INTERVAL_MS);
                         attempts++;
                     }
 
                     if (DateTime.UtcNow.Year < 2020)
                     {
-                        LogHelper.LogWarning("SNTP failed to set time within timeout.");
+                        LogHelper.LogWarning($"SNTP failed to set time within {SNTP_SYNC_TIMEOUT_MS}ms timeout.");
                     }
                     else
                     {
                         LogHelper.LogInformation($"SNTP synced. UTC now: {DateTime.UtcNow}");
                     }
 
-                    // Stop the SNTP client after initial sync; periodic sync can be started elsewhere if desired
+                    // Stop the SNTP client after initial sync
                     nanoFramework.Networking.Sntp.Stop();
                 }
             }
             catch (Exception ex)
             {
-                LogHelper.LogWarning($"SNTP failed: {ex.Message}");
+                LogHelper.LogWarning($"SNTP sync failed: {ex.Message}");
             }
-
-            _isConnectionInProgress = false;
         }
 
         /// <summary>
@@ -342,17 +433,43 @@
 
         private void RaiseConnectionRestored()
         {
-            if (this.ConnectionRestored != null)
+            try
             {
-                this.ConnectionRestored(this, EventArgs.Empty);
+                EventHandler handler;
+                lock (_eventLock)
+                {
+                    handler = ConnectionRestored;
+                }
+                handler?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"Error in ConnectionRestored event handler: {ex.Message}");
             }
         }
 
         private void RaiseConnectionLost()
         {
-            if (this.ConnectionLost != null)
+            try
             {
-                this.ConnectionLost(this, EventArgs.Empty);
+                EventHandler handler;
+                lock (_eventLock)
+                {
+                    handler = ConnectionLost;
+                }
+                handler?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"Error in ConnectionLost event handler: {ex.Message}");
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(ConnectionService));
             }
         }
     }
