@@ -36,7 +36,7 @@
         private readonly ISensorDataPublisher _sensorDataPublisher;
 
         private readonly CircuitBreaker _circuitBreaker = new CircuitBreaker();
-        private readonly ReconnectStrategy _reconnectStrategy = new ReconnectStrategy(INITIAL_RECONNECT_DELAY, MAX_RECONNECT_DELAY);
+        private readonly ReconnectStrategy _reconnectStrategy = new ReconnectStrategy(InitialReconnectDelayMs, MaxReconnectDelayMs);
 
         private readonly ManualResetEvent _stopSignal = new ManualResetEvent(false);
         private readonly object _connectionLock = new object();
@@ -237,25 +237,25 @@
             try
             {
                 int attemptCount = 0;
-                int delayBetweenAttempts = INITIAL_RECONNECT_DELAY;
+                int delayBetweenAttempts = InitialReconnectDelayMs;
 
                 _connectionService.CheckConnection();
 
                 LogHelper.LogInformation("Checking internet connection before broker connection.");
 
-                while (this.GetIsRunning() && attemptCount < MAX_TOTAL_ATTEMPTS)
+                while (this.GetIsRunning() && attemptCount < MaxTotalAttempts)
                 {
                     if (!_internetConnectionService.IsInternetAvailable())
                     {
                         LogHelper.LogWarning("Internet not available, pausing connection attempts");
-                        _stopSignal.WaitOne(INTERNET_CHECK_INTERVAL, false);
+                        _stopSignal.WaitOne(InternetCheckIntervalMs, false);
                         continue;
                     }
 
                     if (this.AttemptBrokerConnection())
                     {
                         LogHelper.LogInformation("Connected to MQTT broker. Starting sensor data publisher");
-                        _sensorDataPublisher.Start(SENSOR_DATA_INTERVAL);
+                        _sensorDataPublisher.Start(SensorDataIntervalMs);
                         return;
                     }
 
@@ -263,20 +263,20 @@
 
                     if (attemptCount % 5 == 0)
                     {
-                        LogHelper.LogInformation($"Attempt {attemptCount}/{MAX_TOTAL_ATTEMPTS}. Retry in {delayBetweenAttempts / 1000}s");
+                        LogHelper.LogInformation($"Attempt {attemptCount}/{MaxTotalAttempts}. Retry in {delayBetweenAttempts / 1000}s");
                     }
 
                     int jitter;
                     lock (_randomLock)
                     {
-                        jitter = _random.Next(JITTER_RANGE) + JITTER_BASE;
+                        jitter = _random.Next(JitterRangeMs) + JitterBaseMs;
                     }
                     _stopSignal.WaitOne(delayBetweenAttempts + jitter, false);
 
                     delayBetweenAttempts = _reconnectStrategy.GetNextDelay(delayBetweenAttempts);
                 }
 
-                _circuitBreaker.Open(TimeSpan.FromMinutes(5));
+                _circuitBreaker.Open(TimeSpan.FromMinutes(CircuitBreakerTimeoutMinutes));
                 LogHelper.LogWarning("Max connection attempts reached. Circuit breaker activated.");
 
                 this.HandleMaxAttemptsReached();
@@ -326,7 +326,7 @@
 
             _stopSignal.WaitOne(DeepSleepWaitMs, false);
 
-            TimeSpan deepSleepDuration = new TimeSpan(0, DEEP_SLEEP_MINUTES, 0);
+            TimeSpan deepSleepDuration = new TimeSpan(0, DeepSleepMinutes, 0);
 
             Sleep.EnableWakeupByTimer(deepSleepDuration);
             Sleep.StartDeepSleep();
