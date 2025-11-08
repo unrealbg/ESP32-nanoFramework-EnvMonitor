@@ -56,23 +56,55 @@
                     return;
                 }
 
+                // Platform check
                 if (SystemInfo.TargetName != "ESP32_S3")
                 {
                     LogHelper.LogWarning("Web server is supported only on ESP32_S3. Current platform: " + SystemInfo.TargetName);
                     return;
                 }
 
+                long availableMemory = nanoFramework.Runtime.Native.GC.Run(true);
+                const long MinMemoryForWebServer = 40000;
+                
+                if (availableMemory < MinMemoryForWebServer)
+                {
+                    LogHelper.LogWarning($"Insufficient memory to safely start WebServer. Available: {availableMemory} bytes, Minimum: {MinMemoryForWebServer} bytes");
+                    return;
+                }
+                
+                LogHelper.LogInformation($"Starting WebServer with {availableMemory} bytes available memory");
+
                 try
                 {
                     this.InitializeWebServer();
                     _server.Start();
                     _isServerRunning = true;
-                    LogHelper.LogInformation("Web server started.");
+                    
+                    long afterStart = nanoFramework.Runtime.Native.GC.Run(false);
+                    LogHelper.LogInformation($"Web server started successfully. Memory after start: {afterStart} bytes");
+                }
+                catch (OutOfMemoryException memEx)
+                {
+                    LogHelper.LogError($"Out of memory starting web server: {memEx.Message}");
+                    LogService.LogCritical("WebServer failed to start due to insufficient memory", memEx);
+                    
+                    if (_server != null)
+                    {
+                        try
+                        {
+                            _server.Dispose();
+                            _server = null;
+                        }
+                        catch
+                        {
+                            // Ignore cleanup errors
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
                     LogHelper.LogError("Error starting web server: " + ex.Message);
-                    LogService.LogCritical("Error starting web server: " + ex.Message);
+                    LogService.LogCritical("Error starting web server: " + ex.Message, ex);
                 }
             }
         }
