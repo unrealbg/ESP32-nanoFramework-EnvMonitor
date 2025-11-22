@@ -65,5 +65,36 @@
             public const int MaxLogEntries = 100;
             public const bool EnableDebugLogging = true;
         }
+
+        /// <summary>
+        /// Feature toggles for optional subsystems. Tune these per deployment profile before flashing the firmware.
+        /// Small ESP32 variants (C3, original WROOM) should keep most of them disabled to conserve RAM and threads.
+        /// </summary>
+        public static class Features
+        {
+            /// <summary>
+            /// Enables the TCP console listener (command shell). Each active sesssion consumes ~8 KB and one thread,
+            /// so keep this false on unattended or battery powered nodes.
+            /// </summary>
+            public const bool EnableTcpConsole = false;
+
+            /// <summary>
+            /// Enables the embedded web server. Requires sufficient RAM and platform support; only enable when
+            /// `PlatformService.SupportsWebServer()` reports true during boot logs.
+            /// </summary>
+            public const bool EnableWebServer = true;
+
+            /// <summary>
+            /// Enables verbose runtime memory monitor (DEBUG builds only). Useful while tuning memory pressure, but
+            /// should remain disabled for production firmware to avoid extra GC churn and log noise.
+            /// </summary>
+            public const bool EnableMemoryMonitor = false;
+
+            /// <summary>
+            /// Enables OTA handling routed through MQTT (modules stay registered but commands are ignored when false).
+            /// If OTA is delivered exclusively over TCP or USB, you can disable this to reduce attack surface.
+            /// </summary>
+            public const bool EnableOtaOverMqtt = true;
+        }
     }
 }
