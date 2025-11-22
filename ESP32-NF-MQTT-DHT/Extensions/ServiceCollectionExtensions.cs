@@ -1,5 +1,6 @@
 ﻿namespace ESP32_NF_MQTT_DHT.Extensions
 {
+    using ESP32_NF_MQTT_DHT.Configuration;
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.Managers;
     using ESP32_NF_MQTT_DHT.Managers.Contracts;
@@ -7,6 +8,7 @@
     using ESP32_NF_MQTT_DHT.Modules.Contracts;
     using ESP32_NF_MQTT_DHT.Services;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
+    using ESP32_NF_MQTT_DHT.Services.NoOp;
     using ESP32_NF_MQTT_DHT.Services.MQTT;
     using ESP32_NF_MQTT_DHT.Services.MQTT.Contracts;
 
@@ -37,9 +39,9 @@
             services.AddSingleton(typeof(IMqttClientService), typeof(MqttClientService));
             services.AddSingleton(typeof(IMqttConnectionManager), typeof(MqttConnectionManager));
             services.AddSingleton(typeof(IMqttPublishService), typeof(MqttPublishService));
-            services.AddSingleton(typeof(ITcpListenerService), typeof(TcpListenerService));
-            services.AddSingleton(typeof(IWebServerService), typeof(WebServerService));
-            services.AddSingleton(typeof(IOtaService), typeof(OtaService));
+            services.AddSingleton(typeof(ITcpListenerService), AppConfiguration.Features.EnableTcpConsole ? typeof(TcpListenerService) : typeof(NoOpTcpListenerService));
+            services.AddSingleton(typeof(IWebServerService), AppConfiguration.Features.EnableWebServer ? typeof(WebServerService) : typeof(NoOpWebServerService));
+            services.AddSingleton(typeof(IOtaService), AppConfiguration.Features.EnableOtaOverMqtt ? typeof(OtaService) : typeof(NoOpOtaService));
             
             // Hardware services
             services.AddSingleton(typeof(IRelayService), typeof(RelayService));
