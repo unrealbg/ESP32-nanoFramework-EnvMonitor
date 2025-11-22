@@ -1,5 +1,7 @@
 namespace ESP32_NF_MQTT_DHT.Services
 {
+    using System;
+
     using ESP32_NF_MQTT_DHT.Configuration;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
     using nanoFramework.Runtime.Native;
@@ -9,6 +11,10 @@ namespace ESP32_NF_MQTT_DHT.Services
     /// </summary>
     public class PlatformService : IPlatformService
     {
+        private readonly object _memoryLock = new object();
+        private long _lastSampledMemory = -1;
+        private DateTime _lastSampleTimestamp = DateTime.MinValue;
+
         /// <summary>
         /// Gets the target platform name.
         /// </summary>
@@ -75,7 +81,24 @@ namespace ESP32_NF_MQTT_DHT.Services
         /// <returns>Available memory in bytes.</returns>
         public long GetAvailableMemory()
         {
-            return GC.Run(true);
+            lock (_memoryLock)
+            {
+                var age = DateTime.UtcNow - _lastSampleTimestamp;
+                if (age.TotalSeconds < 30 && _lastSampledMemory >= 0)
+                {
+                    return _lastSampledMemory;
+                }
+
+                long snapshot = GC.Run(false);
+                if (snapshot < AppConfiguration.Platform.StartupRequiredMemory)
+                {
+                    snapshot = GC.Run(true);
+                }
+
+                _lastSampledMemory = snapshot;
+                _lastSampleTimestamp = DateTime.UtcNow;
+                return _lastSampledMemory;
+            }
         }
 
         /// <summary>
