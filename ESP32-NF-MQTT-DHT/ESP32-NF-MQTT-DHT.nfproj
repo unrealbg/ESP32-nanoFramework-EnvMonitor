@@ -52,7 +52,6 @@
     <Compile Include="Services\LogService.cs" />
     <Compile Include="Services\MQTT\CircuitBreaker.cs" />
     <Compile Include="Services\MQTT\Contracts\IMqttConnectionManager.cs" />
-    <Compile Include="Services\MQTT\Contracts\ISensorDataPublisher.cs" />
     <Compile Include="Services\MQTT\ReconnectStrategy.cs" />
     <Compile Include="Services\PlatformService.cs" />
     <Compile Include="Services\Sensors\Aht20Bmp280SensorService.cs" />
@@ -75,7 +74,6 @@
     <Compile Include="Services\MQTT\MqttConnectionManager.cs" />
     <Compile Include="Services\MQTT\MqttMessageHandler.cs" />
     <Compile Include="Services\MQTT\MqttPublishService.cs" />
-    <Compile Include="Services\MQTT\SensorDataPublisher.cs" />
     <Compile Include="Services\Sensors\BaseSensorService.cs" />
     <Compile Include="Services\Sensors\Shtc3SensorService.cs" />
     <Compile Include="Services\ServiceStartupManager.cs" />
@@ -102,6 +100,9 @@
     <Compile Include="Services\Sensors\DhtService.cs" />
     <Compile Include="Services\MqttClientService.cs" />
     <Compile Include="Services\OtaService.cs" />
+    <Compile Include="Services\NoOp\NoOpOtaService.cs" />
+    <Compile Include="Services\NoOp\NoOpTcpListenerService.cs" />
+    <Compile Include="Services\NoOp\NoOpWebServerService.cs" />
     <Compile Include="Services\RelayService.cs" />
     <Compile Include="Services\TcpListenerService.cs" />
     <Compile Include="Services\UptimeService.cs" />
@@ -236,7 +237,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
-    <None Include="README-OTA-MODULES.md" />
     <None Include="Settings\ota_root_ca.pem" />
   </ItemGroup>
   <Import Project="$(NanoFrameworkProjectSystemPath)NFProjectSystem.CSharp.targets" Condition="Exists('$(NanoFrameworkProjectSystemPath)NFProjectSystem.CSharp.targets')" />
