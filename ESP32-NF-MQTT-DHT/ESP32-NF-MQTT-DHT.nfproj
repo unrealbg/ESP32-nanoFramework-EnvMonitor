@@ -34,6 +34,7 @@
     <Compile Include="Exceptions\ApplicationExceptions.cs" />
     <Compile Include="ExtensionAttribute.cs" />
     <Compile Include="Helpers\CredentialCache.cs" />
+    <Compile Include="Helpers\DeviceConfig.cs" />
     <Compile Include="Modules\Contracts\IModule.cs" />
     <Compile Include="Modules\Contracts\IModuleManager.cs" />
     <Compile Include="Modules\ModuleManager.cs" />
@@ -48,6 +49,7 @@
     <Compile Include="OTA\StrVec.cs" />
     <Compile Include="Services\Contracts\IPlatformService.cs" />
     <Compile Include="Services\Contracts\IServiceStartupManager.cs" />
+    <Compile Include="Services\Contracts\StartupService.cs" />
     <Compile Include="Services\LedIndicatorService.cs" />
     <Compile Include="Services\LogService.cs" />
     <Compile Include="Services\MQTT\CircuitBreaker.cs" />
@@ -68,8 +70,10 @@
     <Compile Include="Helpers\SensorServiceFactory.cs" />
     <Compile Include="Extensions\ServiceCollectionExtensions.cs" />
     <Compile Include="Services\Contracts\IInternetConnectionService.cs" />
+    <Compile Include="Services\Contracts\IIrcBotService.cs" />
     <Compile Include="Services\Contracts\ISensorService.cs" />
     <Compile Include="Services\InternetConnectionService.cs" />
+    <Compile Include="Services\IrcBotService.cs" />
     <Compile Include="Services\MQTT\Contracts\IMqttPublishService.cs" />
     <Compile Include="Services\MQTT\MqttConnectionManager.cs" />
     <Compile Include="Services\MQTT\MqttMessageHandler.cs" />
@@ -78,6 +82,7 @@
     <Compile Include="Services\Sensors\Shtc3SensorService.cs" />
     <Compile Include="Services\ServiceStartupManager.cs" />
     <Compile Include="Settings\DeviceSettings.cs" />
+    <Compile Include="Settings\IrcSettings.cs" />
     <Compile Include="Settings\MqttSettings.cs" />
     <Compile Include="Settings\OtaCertificates.cs" />
     <Compile Include="Settings\WebServerSettings.cs" />
@@ -100,7 +105,9 @@
     <Compile Include="Services\Sensors\DhtService.cs" />
     <Compile Include="Services\MqttClientService.cs" />
     <Compile Include="Services\OtaService.cs" />
+    <Compile Include="Services\NoOp\NoOpMqttClientService.cs" />
     <Compile Include="Services\NoOp\NoOpOtaService.cs" />
+    <Compile Include="Services\NoOp\NoOpIrcBotService.cs" />
     <Compile Include="Services\NoOp\NoOpTcpListenerService.cs" />
     <Compile Include="Services\NoOp\NoOpWebServerService.cs" />
     <Compile Include="Services\RelayService.cs" />
