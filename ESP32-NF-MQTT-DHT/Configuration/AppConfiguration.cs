@@ -1,5 +1,7 @@
-﻿namespace ESP32_NF_MQTT_DHT.Configuration
+namespace ESP32_NF_MQTT_DHT.Configuration
 {
+    using ESP32_NF_MQTT_DHT.Helpers;
+
     /// <summary>
     /// Centralized configuration provider for all application settings.
     /// </summary>
@@ -19,16 +21,22 @@
         /// </summary>
         public static class Platform
         {
-         
             public const long WebServerRequiredMemory = 45000;
             public const long StartupRequiredMemory = 40000;
-            
+
+            // TCP console costs a thread + socket buffers; keep a slightly higher threshold to avoid starving the heap.
+            // If you must run TCP console alongside WebServer + MQTT, you may need a board/firmware with more free RAM.
+            public const long TcpConsoleRequiredMemory = 38000;
+
+            // IRC bot keeps one additional worker thread plus a persistent outbound socket.
+            public const long IrcBotRequiredMemory = 32000;
+
             public const string SupportedWebServerPlatform = "ESP32_S3";
-            
+
             public static readonly string[] AlternativePlatformNames = new string[]
             {
                 "ESP32-S3",      // With dash
-                "ESP32_S3",      // With underscore (primary) ✅ CONFIRMED from logs
+                "ESP32_S3",      // With underscore (primary)
                 "ESP32S3",       // No separator
                 "KALUGA_1",      // ESP32-S3 dev board
                 "ESP32_S3_ALL"   // Possible variant
@@ -67,34 +75,57 @@
         }
 
         /// <summary>
-        /// Feature toggles for optional subsystems. Tune these per deployment profile before flashing the firmware.
-        /// Small ESP32 variants (C3, original WROOM) should keep most of them disabled to conserve RAM and threads.
+        /// Feature toggles for optional subsystems.
+        /// All values are runtime-configurable from <c>I:\config\device.config</c>.
         /// </summary>
         public static class Features
         {
             /// <summary>
-            /// Enables the TCP console listener (command shell). Each active sesssion consumes ~8 KB and one thread,
-            /// so keep this false on unattended or battery powered nodes.
+            /// Enables the sensor manager background sampling loop.
             /// </summary>
-            public const bool EnableTcpConsole = false;
+            public static bool EnableSensorManager => DeviceConfig.GetBoolean("feature.sensor.enabled", true);
 
             /// <summary>
-            /// Enables the embedded web server. Requires sufficient RAM and platform support; only enable when
-            /// `PlatformService.SupportsWebServer()` reports true during boot logs.
+            /// Enables the MQTT client worker and broker connectivity.
             /// </summary>
-            public const bool EnableWebServer = true;
+            public static bool EnableMqttClient => DeviceConfig.GetBoolean("feature.mqtt.enabled", true);
 
             /// <summary>
-            /// Enables verbose runtime memory monitor (DEBUG builds only). Useful while tuning memory pressure, but
-            /// should remain disabled for production firmware to avoid extra GC churn and log noise.
+            /// Enables the IRC bot client. Runtime connection details still come from <c>device.config</c>
+            /// and the bot does not start unless at least <c>irc.server</c> is configured.
             /// </summary>
-            public const bool EnableMemoryMonitor = false;
+            public static bool EnableIrcBot => DeviceConfig.GetBoolean("feature.irc.enabled", false);
 
             /// <summary>
-            /// Enables OTA handling routed through MQTT (modules stay registered but commands are ignored when false).
-            /// If OTA is delivered exclusively over TCP or USB, you can disable this to reduce attack surface.
+            /// Enables the TCP console listener (command shell).
             /// </summary>
-            public const bool EnableOtaOverMqtt = true;
+            public static bool EnableTcpConsole => DeviceConfig.GetBoolean("feature.tcp.enabled", false);
+
+            /// <summary>
+            /// Enables the embedded web server.
+            /// </summary>
+            public static bool EnableWebServer => DeviceConfig.GetBoolean("feature.web.enabled", false);
+
+            /// <summary>
+            /// Enables verbose runtime memory monitor (DEBUG builds only).
+            /// </summary>
+            public static bool EnableMemoryMonitor => DeviceConfig.GetBoolean("feature.memoryMonitor.enabled", false);
+
+            /// <summary>
+            /// Logs free memory checkpoints during startup (DEBUG builds only).
+            /// </summary>
+            public static bool EnableStartupMemoryTrace => DeviceConfig.GetBoolean("feature.startupMemoryTrace.enabled", false);
+
+            /// <summary>
+            /// Enables OTA handling routed through MQTT.
+            /// </summary>
+            public static bool EnableOtaOverMqtt => DeviceConfig.GetBoolean("feature.otaMqtt.enabled", false);
+
+            /// <summary>
+            /// Enables loading OTA-delivered external modules from storage.
+            /// Disabled by default to keep boot time, RAM use, and reflection overhead low.
+            /// </summary>
+            public static bool EnableDynamicModuleLoading => DeviceConfig.GetBoolean("feature.modules.enabled", false);
         }
     }
 }
