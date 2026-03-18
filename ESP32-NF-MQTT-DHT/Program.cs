@@ -3,6 +3,7 @@ namespace ESP32_NF_MQTT_DHT
     using System;
     using System.Threading;
 
+    using ESP32_NF_MQTT_DHT.Configuration;
     using ESP32_NF_MQTT_DHT.Extensions;
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.Services;
@@ -22,7 +23,10 @@ namespace ESP32_NF_MQTT_DHT
         public static void Main()
         {
 #if DEBUG
-            new Thread(MemoryMonitor).Start();
+            if (AppConfiguration.Features.EnableMemoryMonitor)
+            {
+                new Thread(MemoryMonitor).Start();
+            }
 #endif
             CredentialCache.Load();
 
@@ -63,22 +67,28 @@ namespace ESP32_NF_MQTT_DHT
         {
             while (true)
             {
-                long totalMemory = GC.Run(false);
-                long afterGC = GC.Run(true);
-                
-                LogHelper.LogInformation($"[MemoryMonitor] Free: {totalMemory} bytes, After GC: {afterGC} bytes, Recovered: {totalMemory - afterGC} bytes");
-                
-                // Warning if memory is low
-                if (afterGC < 30000)
+                long snapshot = GC.Run(false);
+                long reclaimed = 0;
+
+                if (snapshot < AppConfiguration.Platform.StartupRequiredMemory)
                 {
-                    LogHelper.LogWarning($"[MemoryMonitor] LOW MEMORY: {afterGC} bytes remaining!");
-                }
-                else if (afterGC < 50000)
-                {
-                    LogHelper.LogWarning($"[MemoryMonitor] Memory getting low: {afterGC} bytes");
+                    long afterGc = GC.Run(true);
+                    reclaimed = snapshot - afterGc;
+                    snapshot = afterGc;
                 }
 
-                Thread.Sleep(60000);
+                LogHelper.LogInformation($"[MemoryMonitor] Free: {snapshot} bytes, Reclaimed: {reclaimed} bytes");
+
+                if (snapshot < 30000)
+                {
+                    LogHelper.LogWarning($"[MemoryMonitor] LOW MEMORY: {snapshot} bytes remaining!");
+                }
+                else if (snapshot < 50000)
+                {
+                    LogHelper.LogWarning($"[MemoryMonitor] Memory getting low: {snapshot} bytes");
+                }
+
+                Thread.Sleep(90000);
             }
         }
     }

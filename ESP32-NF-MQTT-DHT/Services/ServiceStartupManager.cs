@@ -1,5 +1,6 @@
 namespace ESP32_NF_MQTT_DHT.Services
 {
+    using ESP32_NF_MQTT_DHT.Configuration;
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.Managers.Contracts;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
@@ -36,8 +37,24 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             this.StartService("SensorManager");
             this.StartService("MqttClient");
-            this.StartService("TcpListener");
-            this.StartService("WebServer");
+
+            if (AppConfiguration.Features.EnableTcpConsole)
+            {
+                this.StartService("TcpListener");
+            }
+            else
+            {
+                LogHelper.LogInformation("TCP listener disabled – skipping startup.");
+            }
+
+            if (AppConfiguration.Features.EnableWebServer)
+            {
+                this.StartService("WebServer");
+            }
+            else
+            {
+                LogHelper.LogInformation("WebServer disabled – skipping startup.");
+            }
         }
 
         /// <summary>
@@ -91,6 +108,11 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private void StartTcpListener()
         {
+            if (!AppConfiguration.Features.EnableTcpConsole)
+            {
+                return;
+            }
+
             LogHelper.LogInformation("Starting TCPListener service...");
             _tcpListenerService.Start();
             LogHelper.LogInformation("TCPListener service started.");
@@ -98,6 +120,11 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private void StartWebServerIfSupported()
         {
+            if (!AppConfiguration.Features.EnableWebServer)
+            {
+                return;
+            }
+
             if (_platformService.SupportsWebServer())
             {
                 var availableMemory = _platformService.GetAvailableMemory();

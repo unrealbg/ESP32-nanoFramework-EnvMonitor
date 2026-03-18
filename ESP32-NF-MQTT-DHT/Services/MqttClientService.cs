@@ -33,19 +33,19 @@
         private readonly MqttMessageHandler _mqttMessageHandler;
         private readonly IMqttPublishService _mqttPublishService;
         private readonly IMqttConnectionManager _connectionManager;
-        private readonly ISensorDataPublisher _sensorDataPublisher;
 
         private readonly CircuitBreaker _circuitBreaker = new CircuitBreaker();
         private readonly ReconnectStrategy _reconnectStrategy = new ReconnectStrategy(InitialReconnectDelayMs, MaxReconnectDelayMs);
 
         private readonly ManualResetEvent _stopSignal = new ManualResetEvent(false);
+        private readonly ManualResetEvent _wakeSignal = new ManualResetEvent(false);
+        private readonly WaitHandle[] _workerSignals;
         private readonly object _connectionLock = new object();
         private readonly object _stateLock = new object();
         private readonly object _randomLock = new object();
         private readonly object _heartbeatLock = new object();
 
         private bool _isRunning;
-        private bool _isConnecting;
         private bool _isHeartbeatRunning;
         private bool _isDisposed;
         private bool _isWifiConnected = true;
@@ -55,7 +55,7 @@
         private EventHandler _connectionLostHandler;
         private EventHandler _connectionRestoredHandler;
 
-        private Thread _connectionThread;
+        private Thread _workerThread;
 
         private readonly Random _random = new Random();
 
@@ -74,7 +74,6 @@
             _mqttMessageHandler = mqttMessageHandler ?? throw new ArgumentNullException(nameof(mqttMessageHandler));
             _mqttPublishService = mqttPublishService ?? throw new ArgumentNullException(nameof(mqttPublishService));
             _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
-            _sensorDataPublisher = new SensorDataPublisher(this.SensorDataTimerCallback);
 
             _internetLostHandler = (s, e) => this.OnConnectivityChanged(s, false, InternetSource);
             _internetRestoredHandler = (s, e) => this.OnConnectivityChanged(s, true, InternetSource);
@@ -87,6 +86,8 @@
             _connectionService.ConnectionRestored += _connectionRestoredHandler;
 
             this.SetIsRunning(true);
+
+            _workerSignals = new WaitHandle[] { _stopSignal, _wakeSignal };
         }
 
         /// <summary>
@@ -108,40 +109,25 @@
         {
             ThrowIfDisposed();
 
-            _stopSignal.Reset();
-
             lock (_connectionLock)
             {
-                if (_connectionThread != null && _connectionThread.IsAlive)
+                if (_workerThread != null && _workerThread.IsAlive)
                 {
-                    LogHelper.LogInformation("Connection thread already running");
+                    LogHelper.LogInformation("MQTT worker already running");
+                    _wakeSignal.Set();
                     return;
                 }
 
-                if (_circuitBreaker.IsOpen)
-                {
-                    LogHelper.LogWarning("Circuit breaker is open. Delaying connection attempts until reset.");
-                    return;
-                }
-
+                _stopSignal.Reset();
+                _wakeSignal.Reset();
                 _circuitBreaker.Close();
+                this.SetIsRunning(true);
 
-                if (!_connectionService.IsConnected)
-                {
-                    LogHelper.LogWarning("WiFi not connected. Waiting for WiFi before checking Internet...");
-                    return;
-                }
-
-                if (_internetConnectionService.IsInternetAvailable())
-                {
-                    _connectionThread = new Thread(this.EstablishBrokerConnection);
-                    _connectionThread.Start();
-                }
-                else
-                {
-                    LogHelper.LogWarning("Internet not available on startup. Waiting for internet restoration...");
-                }
+                _workerThread = new Thread(this.ConnectivityLoop);
+                _workerThread.Start();
             }
+
+            _wakeSignal.Set();
         }
 
         /// <summary>
@@ -152,23 +138,23 @@
             ThrowIfDisposed();
 
             this.SetIsRunning(false);
-            _sensorDataPublisher.Stop();
 
             this.SafeDisconnect();
 
             _stopSignal.Set();
+            _wakeSignal.Set();
 
             lock (_connectionLock)
             {
-                if (_connectionThread != null && _connectionThread.IsAlive)
+                if (_workerThread != null && _workerThread.IsAlive)
                 {
-                    _connectionThread.Join(ConnectionThreadJoinTimeoutMs);
-                    if (_connectionThread.IsAlive)
+                    _workerThread.Join(ConnectionThreadJoinTimeoutMs);
+                    if (_workerThread.IsAlive)
                     {
-                        LogHelper.LogWarning("Connection thread did not terminate within timeout.");
+                        LogHelper.LogWarning("MQTT worker did not terminate within timeout.");
                     }
                 }
-                _connectionThread = null;
+                _workerThread = null;
             }
         }
 
@@ -218,74 +204,85 @@
         }
 
         /// <summary>
-        /// Establishes connection to the MQTT broker using an exponential backoff strategy
-        /// and activates a simple circuit breaker if maximum attempts are reached.
+        /// Single worker loop coordinating Wi-Fi, internet, MQTT connection, and sensor publishing.
+        /// Keeps retries, deep sleep logic, and publishing cadence inside one thread to minimize memory usage.
         /// </summary>
-        private void EstablishBrokerConnection()
+        private void ConnectivityLoop()
         {
-            lock (_connectionLock)
+            int attemptCount = 0;
+            int reconnectDelay = InitialReconnectDelayMs;
+            DateTime nextSensorPublish = DateTime.UtcNow;
+
+            while (this.GetIsRunning())
             {
-                if (_isConnecting)
+                if (_circuitBreaker.IsOpen)
                 {
-                    LogHelper.LogInformation("Already connecting to broker");
-                    return;
+                    LogHelper.LogWarning("Circuit breaker open. Waiting before retrying MQTT connection.");
+                    if (this.WaitForWake(reconnectDelay))
+                    {
+                        break;
+                    }
+
+                    continue;
                 }
 
-                _isConnecting = true;
-            }
+                bool wifiReady = this.EnsureWifiConnected();
+                bool internetReady = wifiReady && this.EnsureInternetAvailable();
 
-            try
-            {
-                int attemptCount = 0;
-                int delayBetweenAttempts = InitialReconnectDelayMs;
-
-                _connectionService.CheckConnection();
-
-                LogHelper.LogInformation("Checking internet connection before broker connection.");
-
-                while (this.GetIsRunning() && attemptCount < MaxTotalAttempts)
+                if (!wifiReady || !internetReady)
                 {
-                    if (!_internetConnectionService.IsInternetAvailable())
+                    this.SafeDisconnect();
+                    int wait = internetReady ? InternetCheckIntervalMs : 5000;
+                    if (this.WaitForWake(wait))
                     {
-                        LogHelper.LogWarning("Internet not available, pausing connection attempts");
-                        _stopSignal.WaitOne(InternetCheckIntervalMs, false);
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (!this.IsMqttReady())
+                {
+                    if (this.AttemptBrokerConnection())
+                    {
+                        LogHelper.LogInformation("Connected to MQTT broker.");
+                        attemptCount = 0;
+                        reconnectDelay = InitialReconnectDelayMs;
+                        nextSensorPublish = DateTime.UtcNow;
                         continue;
                     }
 
-                    if (this.AttemptBrokerConnection())
-                    {
-                        LogHelper.LogInformation("Connected to MQTT broker. Starting sensor data publisher");
-                        _sensorDataPublisher.Start(SensorDataIntervalMs);
-                        return;
-                    }
-
                     attemptCount++;
+                    LogHelper.LogWarning($"MQTT connection failed (attempt {attemptCount}/{MaxTotalAttempts}).");
 
-                    if (attemptCount % 5 == 0)
+                    if (attemptCount >= MaxTotalAttempts)
                     {
-                        LogHelper.LogInformation($"Attempt {attemptCount}/{MaxTotalAttempts}. Retry in {delayBetweenAttempts / 1000}s");
+                        _circuitBreaker.Open(TimeSpan.FromMinutes(CircuitBreakerTimeoutMinutes));
+                        attemptCount = 0;
+                        reconnectDelay = InitialReconnectDelayMs;
+                        this.HandleMaxAttemptsReached();
+                        continue;
                     }
 
-                    int jitter;
-                    lock (_randomLock)
+                    reconnectDelay = _reconnectStrategy.GetNextDelay(reconnectDelay);
+                    if (this.WaitForWake(reconnectDelay + this.GetJitter()))
                     {
-                        jitter = _random.Next(JitterRangeMs) + JitterBaseMs;
+                        break;
                     }
-                    _stopSignal.WaitOne(delayBetweenAttempts + jitter, false);
 
-                    delayBetweenAttempts = _reconnectStrategy.GetNextDelay(delayBetweenAttempts);
+                    continue;
                 }
 
-                _circuitBreaker.Open(TimeSpan.FromMinutes(CircuitBreakerTimeoutMinutes));
-                LogHelper.LogWarning("Max connection attempts reached. Circuit breaker activated.");
-
-                this.HandleMaxAttemptsReached();
-            }
-            finally
-            {
-                lock (_connectionLock)
+                if (DateTime.UtcNow >= nextSensorPublish)
                 {
-                    _isConnecting = false;
+                    this.PublishSensorData();
+                    nextSensorPublish = DateTime.UtcNow.AddMilliseconds(SensorDataIntervalMs);
+                }
+
+                int waitForNextCycle = (int)Math.Max(500, (nextSensorPublish - DateTime.UtcNow).TotalMilliseconds);
+                if (this.WaitForWake(waitForNextCycle))
+                {
+                    break;
                 }
             }
         }
@@ -322,7 +319,6 @@
             LogHelper.LogWarning("Entering deep sleep to conserve power");
 
             this.SafeDisconnect();
-            _sensorDataPublisher.Stop();
 
             _stopSignal.WaitOne(DeepSleepWaitMs, false);
 
@@ -409,37 +405,6 @@
         }
 
         /// <summary>
-        /// Timer callback method that publishes sensor data.
-        /// </summary>
-        private void SensorDataTimerCallback(object state)
-        {
-            if (_isDisposed || !this.GetIsRunning())
-            {
-                return;
-            }
-
-            try
-            {
-                _mqttPublishService.PublishSensorData();
-            }
-            catch (Exception ex)
-            {
-                LogHelper.LogError($"SensorDataTimer Exception: {ex.Message}\n{ex}");
-
-                try
-                {
-                    _mqttPublishService.PublishError($"SensorDataTimer Exception: {ex.Message}");
-                }
-                catch (Exception innerEx)
-                {
-                    LogHelper.LogError($"Error publishing sensor data error: {innerEx.Message}\n{innerEx}");
-                }
-
-                LogService.LogCritical($"SensorDataTimer Exception: {ex.Message}\n{ex}");
-            }
-        }
-
-        /// <summary>
         /// Handles changes in connectivity, logging the status and managing the connection state accordingly.
         /// </summary>
         /// <param name="sender">Indicates the origin of the connectivity change event.</param>
@@ -459,20 +424,14 @@
                 if (isRestored)
                 {
                     LogHelper.LogInformation("WiFi restored.");
-                    if (_internetConnectionService.IsInternetAvailable())
-                    {
-                        this.Start();
-                    }
-                    else
-                    {
-                        LogHelper.LogWarning("WiFi restored, but no internet yet.");
-                    }
+                    _wakeSignal.Set();
+                    this.Start();
                 }
                 else
                 {
                     LogHelper.LogWarning("WiFi lost.");
                     this.SafeDisconnect();
-                    _sensorDataPublisher.Stop();
+                    _wakeSignal.Set();
                 }
             }
             else if (source == InternetSource)
@@ -486,6 +445,7 @@
                     {
                         _isWifiConnected = true;
                         LogHelper.LogInformation("WiFi is now detected as connected, starting MQTT...");
+                        _wakeSignal.Set();
                         this.Start();
                     }
                     else
@@ -499,13 +459,14 @@
                 if (isRestored)
                 {
                     LogHelper.LogInformation("Internet restored.");
+                    _wakeSignal.Set();
                     this.Start();
                 }
                 else
                 {
                     LogHelper.LogWarning("Internet lost.");
                     this.SafeDisconnect();
-                    _sensorDataPublisher.Stop();
+                    _wakeSignal.Set();
                 }
             }
         }
@@ -523,20 +484,106 @@
             LogHelper.LogWarning("Lost connection to MQTT broker, attempting to reconnect...");
 
             this.SafeDisconnect();
-            _sensorDataPublisher.Stop();
+            _wakeSignal.Set();
+        }
 
-            _connectionService.CheckConnection();
-
-            if (!_connectionService.IsConnectionInProgress)
+        private bool EnsureWifiConnected()
+        {
+            try
             {
-                if (_internetConnectionService.IsInternetAvailable())
+                if (_connectionService.IsConnected)
                 {
-                    this.Start();
+                    return true;
                 }
-                else
+
+                _connectionService.CheckConnection();
+                return _connectionService.IsConnected;
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"WiFi check failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private bool EnsureInternetAvailable()
+        {
+            try
+            {
+                return _internetConnectionService.IsInternetAvailable();
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"Internet availability check failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private bool IsMqttReady()
+        {
+            if (_isDisposed)
+            {
+                return false;
+            }
+
+            var client = _connectionManager.MqttClient;
+            return client != null && client.IsConnected;
+        }
+
+        private int GetJitter()
+        {
+            lock (_randomLock)
+            {
+                return _random.Next(JitterRangeMs) + JitterBaseMs;
+            }
+        }
+
+        private bool WaitForWake(int timeoutMs)
+        {
+            if (timeoutMs < 500)
+            {
+                timeoutMs = 500;
+            }
+
+            int signal = WaitHandle.WaitAny(_workerSignals, timeoutMs, false);
+            if (signal == 0)
+            {
+                return true;
+            }
+
+            if (signal == 1)
+            {
+                _wakeSignal.Reset();
+            }
+
+            return false;
+        }
+
+        private void PublishSensorData()
+        {
+            if (_isDisposed || !this.GetIsRunning())
+            {
+                return;
+            }
+
+            try
+            {
+                _mqttPublishService.PublishSensorData();
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError($"Sensor publish exception: {ex.Message}\n{ex}");
+
+                try
                 {
-                    LogHelper.LogInformation("Internet check thread is running, waiting for it to finish...");
+                    _mqttPublishService.PublishError($"SensorData Exception: {ex.Message}");
                 }
+                catch (Exception innerEx)
+                {
+                    LogHelper.LogError($"Error publishing sensor data error: {innerEx.Message}\n{innerEx}");
+                }
+
+                LogService.LogCritical($"SensorData Exception: {ex.Message}\n{ex}");
             }
         }
 
