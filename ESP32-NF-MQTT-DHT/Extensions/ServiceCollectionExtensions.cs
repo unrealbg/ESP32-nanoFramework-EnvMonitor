@@ -36,12 +36,13 @@
             services.AddSingleton(typeof(IInternetConnectionService), typeof(InternetConnectionService));
             
             // Communication services
-            services.AddSingleton(typeof(IMqttClientService), typeof(MqttClientService));
+            services.AddSingleton(typeof(IMqttClientService), AppConfiguration.Features.EnableMqttClient ? typeof(MqttClientService) : typeof(NoOpMqttClientService));
             services.AddSingleton(typeof(IMqttConnectionManager), typeof(MqttConnectionManager));
             services.AddSingleton(typeof(IMqttPublishService), typeof(MqttPublishService));
+            services.AddSingleton(typeof(IIrcBotService), AppConfiguration.Features.EnableIrcBot ? typeof(IrcBotService) : typeof(NoOpIrcBotService));
             services.AddSingleton(typeof(ITcpListenerService), AppConfiguration.Features.EnableTcpConsole ? typeof(TcpListenerService) : typeof(NoOpTcpListenerService));
             services.AddSingleton(typeof(IWebServerService), AppConfiguration.Features.EnableWebServer ? typeof(WebServerService) : typeof(NoOpWebServerService));
-            services.AddSingleton(typeof(IOtaService), AppConfiguration.Features.EnableOtaOverMqtt ? typeof(OtaService) : typeof(NoOpOtaService));
+            services.AddSingleton(typeof(IOtaService), AppConfiguration.Features.EnableMqttClient && AppConfiguration.Features.EnableOtaOverMqtt ? typeof(OtaService) : typeof(NoOpOtaService));
             
             // Hardware services
             services.AddSingleton(typeof(IRelayService), typeof(RelayService));
