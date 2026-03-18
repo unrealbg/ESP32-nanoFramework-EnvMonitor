@@ -12,6 +12,14 @@ namespace ESP32_NF_MQTT_DHT.Modules.Contracts
         void Register(IModule module);
 
         /// <summary>
+        /// Discovers and registers modules from a directory.
+        /// Implementations may ignore this call when dynamic loading is not supported.
+        /// </summary>
+        /// <param name="dir">Directory containing module files.</param>
+        /// <returns>Number of modules loaded and registered.</returns>
+        int LoadFromDirectory(string dir);
+
+        /// <summary>
         /// Starts all registered modules.
         /// </summary>
         void StartAll();
