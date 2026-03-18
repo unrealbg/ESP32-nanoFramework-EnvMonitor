@@ -1,6 +1,7 @@
 # ESP32-MQTT Environmental Monitor
 
 ## Table of Contents
+
 - [Introduction](#introduction)
 - [Requirements](#requirements)
 - [Setup](#setup)
@@ -44,12 +45,26 @@ I acknowledge that the code may not be perfect and there are certainly areas tha
    Set up an MQTT broker (like Mosquitto) on your network. Note down the hostname and port number.
 
 4. **Code Configuration:**  
-   In the code, configure the necessary settings in the `DeviceSettings`, `MqttSettings`, and `WiFiSettings` classes:
-   - ***DeviceSettings***: Set values for `DeviceName`, `Location`, and `SensorType`.
-   - ***MqttSettings***: Provide the `broker address`, `username`, and `password` for your MQTT broker.
-   - ***Wi-Fi Settings***: Enter the `ssid` and `password` for your Wi-Fi network.
-     
-   These settings are defined in dedicated classes and should be modified according to your environment and setup requirements.
+   For nanoFramework it's best to keep secrets out of firmware. This project loads Wi‑Fi and MQTT settings from the device filesystem:
+
+   Create `I:\config\device.config` on the device with `key=value` pairs:
+
+   - `wifi.ssid=YourWifiSsid`
+   - `wifi.password=YourWifiPassword`
+   - `mqtt.broker=your-broker-hostname`
+   - `mqtt.port=1883`
+   - `mqtt.tls=false`
+   - `mqtt.user=yourUser`
+   - `mqtt.pass=yourPass`
+   - `sensor.type=SHTC3` (or `DHT21`, `AHT10`)
+
+   Device identity (name/location) remains in `DeviceSettings`.
+
+   Web/TCP login credentials are stored separately in `I:\config\credentials.txt`:
+
+   - Line 1: username
+   - Line 2 (recommended): `sha256:<salt-hex>:<64-hex>`
+     (legacy formats `sha256:<64-hex>` and plaintext are still accepted and will be migrated after first successful login)
 
 5. **Code Deployment:**  
    Compile and upload the code to your ESP32 device.
@@ -80,19 +95,21 @@ This project includes a web server that serves API endpoints for structured HTTP
 
 ### API Endpoints
 
-1. **Temperature Data**:  
-   - Endpoint: `/api/temperature`  
-   - Method: `GET`  
+1. **Temperature Data**:
+
+   - Endpoint: `/api/temperature`
+   - Method: `GET`
    - Description: Returns the current temperature reading from the selected sensor in JSON format.
 
-2. **Humidity Data**:  
-   - Endpoint: `/api/humidity`  
-   - Method: `GET`  
+2. **Humidity Data**:
+
+   - Endpoint: `/api/humidity`
+   - Method: `GET`
    - Description: Returns the current humidity reading in JSON format.
 
-3. **Complete Sensor Data**:  
-   - Endpoint: `/api/data`  
-   - Method: `GET`  
+3. **Complete Sensor Data**:
+   - Endpoint: `/api/data`
+   - Method: `GET`
    - Description: Returns both temperature and humidity readings along with the sensor type in a structured JSON format.
 
 ## Index Page
@@ -100,7 +117,9 @@ This project includes a web server that serves API endpoints for structured HTTP
 An index page has been added for a user-friendly display of sensor data through a simple web interface. It dynamically updates the temperature, humidity, date, time, and sensor type using JavaScript.
 
 ### Index Page Content
+
 The index page provides a clean and responsive UI for real-time monitoring:
+
 - Displays temperature and humidity readings.
 - Shows the current date, time, and sensor type.
 
@@ -115,14 +134,15 @@ The project now includes a relay control feature accessible via the web interfac
 
 You can control the relay using the following API endpoint:
 
-1. **Toggle Relay**  
-   - Endpoint: `/api/toggle-relay`  
-   - Method: `POST`  
+1. **Toggle Relay**
+
+   - Endpoint: `/api/toggle-relay`
+   - Method: `POST`
    - Description: Toggles the relay state between ON and OFF. The response returns the updated relay state (`isRelayOn`).
 
-2. **Check Relay Status**  
-   - Endpoint: `/api/relay-status`  
-   - Method: `GET`  
+2. **Check Relay Status**
+   - Endpoint: `/api/relay-status`
+   - Method: `GET`
    - Description: Returns the current state of the relay (ON or OFF) in JSON format.
 
 ### Updated Index Page
@@ -133,43 +153,41 @@ The web interface has been updated with a new **Relay Control** button. This but
 - **Turn Off**: Red button displayed when the relay is on.
 
 ### Example HTML:
-```html
-<button id="relayButton" class="btn-on" onclick="toggleRelay()">Loading...</button>
-async function toggleRelay() {
-    const response = await fetch('/api/toggle-relay', { method: 'POST' });
-    const data = await response.json();
-    updateRelayButton(data.isRelayOn);
-}
 
-function updateRelayButton(isRelayOn) {
-    const relayButton = document.getElementById('relayButton');
-    if (isRelayOn) {
-        relayButton.textContent = 'Turn Off';
-        relayButton.className = 'btn-off';
-    } else {
-        relayButton.textContent = 'Turn On';
-        relayButton.className = 'btn-on';
-    }
-}
+```html
+<button id="relayButton" class="btn-on" onclick="toggleRelay()">
+  Loading...
+</button>
+async function toggleRelay() { const response = await fetch('/api/toggle-relay',
+{ method: 'POST' }); const data = await response.json();
+updateRelayButton(data.isRelayOn); } function updateRelayButton(isRelayOn) {
+const relayButton = document.getElementById('relayButton'); if (isRelayOn) {
+relayButton.textContent = 'Turn Off'; relayButton.className = 'btn-off'; } else
+{ relayButton.textContent = 'Turn On'; relayButton.className = 'btn-on'; } }
 ```
 
 ## Additional Functionalities
 
 ### Relay Control
+
 You can control a relay module to manage connected devices based on sensor data or MQTT commands. This enables automated environmental control or remote power management.
 
 ### SHTC3 Sensor Support
+
 In addition to the DHT21 and AHT10 sensors, the project now supports the SHTC3 sensor, offering flexibility in sensor choice based on precision and calibration needs.
 
 ## Project Images
 
 ### Without Breadboard Power Supply
+
 ![Without Breadboard Power Supply](https://user-images.githubusercontent.com/3398536/201364419-9ba27b3e-6638-490f-90f5-0e380fbc2900.png)
 
 ### With Breadboard Power Supply
+
 ![With Breadboard Power Supply](https://user-images.githubusercontent.com/3398536/201362770-067d8fe3-254e-48e2-8cec-10766898c3e6.png)
 
 ### Additional Project Image
+
 <img src="https://user-images.githubusercontent.com/3398536/200621001-ac09d95d-9f0f-4ef7-bf87-8b352f5f1a17.jpg" width="200" /> <img src="https://github.com/unrealbg/NF.Esp32.Mqtt.Dht21/assets/3398536/4cde056b-9c80-467d-a05f-481e5dae26ea" width="200" /> <img src="https://github.com/unrealbg/NF.Esp32.Mqtt.Dht21/assets/3398536/1e2c80ee-9d03-45d0-8034-ce2004eb4cf1" width="200" />
 
 ## Contributing
@@ -192,10 +210,12 @@ Contributions are welcome! Please follow these steps to contribute:
 ## Changelog
 
 ### [v1.0.1] - 2024-12-13
+
 - Added support for SHTC3 sensor.
 - Improved MQTT connection stability.
 
 ### [v1.0.0] - 2024-11-01
+
 - Initial release with DHT21 and AHT10 sensors support.
 
 ## License
