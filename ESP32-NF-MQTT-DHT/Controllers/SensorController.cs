@@ -2,14 +2,13 @@
 {
     using System;
     using System.Net;
+    using System.Text;
 
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.HTML;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
 
     using Models;
-
-    using nanoFramework.Json;
     using nanoFramework.WebServer;
 
     /// <summary>
@@ -76,8 +75,12 @@
                             var temperature = this.FetchTemperature();
                             if (this.IsValidTemperature(temperature))
                             {
-                                var jsonResponse = $"{{\"temperature\": {temperature:f2}}}";
-                                this.SendResponse(e, jsonResponse, "application/json");
+                                var rounded = (Math.Round(temperature * 100) / 100);
+                                var sb = new StringBuilder(32);
+                                sb.Append("{\"temperature\":");
+                                sb.Append(rounded);
+                                sb.Append('}');
+                                this.SendResponse(e, sb.ToString(), "application/json");
                             }
                             else
                             {
@@ -111,8 +114,12 @@
                             var humidity = this.FetchHumidity();
                             if (!double.IsNaN(humidity))
                             {
-                                var jsonResponse = $"{{\"humidity\": {humidity:f1}}}";
-                                this.SendResponse(e, jsonResponse, "application/json");
+                                var rounded = (Math.Round(humidity * 10) / 10);
+                                var sb = new StringBuilder(28);
+                                sb.Append("{\"humidity\":");
+                                sb.Append(rounded);
+                                sb.Append('}');
+                                this.SendResponse(e, sb.ToString(), "application/json");
                             }
                             else
                             {
@@ -143,24 +150,19 @@
                     {
                         try
                         {
-                            var temperature = double.Parse($"{this.FetchTemperature():f2}");
+                            var rawTemperature = this.FetchTemperature();
+                            var temperature = (Math.Round(rawTemperature * 100) / 100);
                             var humidity = this.FetchHumidity();
                             var sensorType = _sensorService.GetSensorType();
 
                             if (!double.IsNaN(temperature) && !double.IsNaN(humidity))
                             {
-                                var sensorData = new Sensor
-                                {
-                                    Data = new Data
-                                    {
-                                        DateTime = DateTime.UtcNow,
-                                        Temp = temperature,
-                                        Humid = (int)humidity,
-                                        SensorType = sensorType
-                                    }
-                                };
-
-                                var jsonResponse = JsonSerializer.SerializeObject(sensorData);
+                                var utcNow = DateTime.UtcNow;
+                                var jsonResponse = BuildSensorDataJson(
+                                    utcNow,
+                                    temperature,
+                                    (int)humidity,
+                                    sensorType);
                                 this.SendResponse(e, jsonResponse, "application/json");
                             }
                             else
@@ -178,6 +180,100 @@
                 "api/data");
         }
 
+        private static string BuildSensorDataJson(DateTime utcNow, double temperature, int humidity, string sensorType)
+        {
+            var sb = new StringBuilder(128);
+
+            sb.Append("{\"Data\":{");
+
+            sb.Append("\"Temp\":");
+            sb.Append(temperature);
+
+            sb.Append(",\"Humid\":");
+            sb.Append(humidity);
+
+            sb.Append(",\"DateTime\":\"");
+            AppendIso8601Utc(sb, utcNow);
+            sb.Append('"');
+
+            sb.Append(",\"SensorType\":");
+            AppendJsonString(sb, sensorType);
+
+            sb.Append("}}");
+            return sb.ToString();
+        }
+
+        private static void AppendIso8601Utc(StringBuilder sb, DateTime utc)
+        {
+            Append4(sb, utc.Year);
+            sb.Append('-');
+            Append2(sb, utc.Month);
+            sb.Append('-');
+            Append2(sb, utc.Day);
+            sb.Append('T');
+            Append2(sb, utc.Hour);
+            sb.Append(':');
+            Append2(sb, utc.Minute);
+            sb.Append(':');
+            Append2(sb, utc.Second);
+            sb.Append('Z');
+        }
+
+        private static void Append2(StringBuilder sb, int value)
+        {
+            sb.Append((char)('0' + ((value / 10) % 10)));
+            sb.Append((char)('0' + (value % 10)));
+        }
+
+        private static void Append4(StringBuilder sb, int value)
+        {
+            sb.Append((char)('0' + ((value / 1000) % 10)));
+            sb.Append((char)('0' + ((value / 100) % 10)));
+            sb.Append((char)('0' + ((value / 10) % 10)));
+            sb.Append((char)('0' + (value % 10)));
+        }
+
+        private static void AppendJsonString(StringBuilder sb, string value)
+        {
+            if (value == null)
+            {
+                sb.Append("null");
+                return;
+            }
+
+            sb.Append('"');
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '"')
+                {
+                    sb.Append("\\\"");
+                }
+                else if (c == '\\')
+                {
+                    sb.Append("\\\\");
+                }
+                else if (c == '\n')
+                {
+                    sb.Append("\\n");
+                }
+                else if (c == '\r')
+                {
+                    sb.Append("\\r");
+                }
+                else if (c == '\t')
+                {
+                    sb.Append("\\t");
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+
+            sb.Append('"');
+        }
+
         /// <summary>
         /// Handles the request for getting the relay status.
         /// </summary>
@@ -191,7 +287,7 @@
                 () =>
                     {
                         bool isRelayOn = _relayService.IsRelayOn();
-                        var jsonResponse = $"{{\"isRelayOn\": {isRelayOn.ToString().ToLower()}}}";
+                        var jsonResponse = "{\"isRelayOn\": " + (isRelayOn ? "true" : "false") + "}";
                         this.SendResponse(e, jsonResponse, "application/json");
                     },
                 "api/relay-status");
@@ -222,7 +318,7 @@
                             isRelayOn = true;
                         }
 
-                        string jsonResponse = $"{{\"isRelayOn\": {isRelayOn.ToString().ToLower()}}}";
+                        string jsonResponse = "{\"isRelayOn\": " + (isRelayOn ? "true" : "false") + "}";
                         this.SendResponse(e, jsonResponse, "application/json");
                     },
                 "api/toggle-relay");

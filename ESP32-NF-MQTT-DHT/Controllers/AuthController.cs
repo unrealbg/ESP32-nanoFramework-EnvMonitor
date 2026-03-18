@@ -36,7 +36,9 @@ namespace ESP32_NF_MQTT_DHT.Controllers
         [Method("GET")]
         public void ChangePasswordPage(WebServerEventArgs e)
         {
+#if DEBUG
             Debug.WriteLine("GET request for change-password page");
+#endif
             
             if (!this.IsAuthenticated(e))
             {
@@ -51,11 +53,15 @@ namespace ESP32_NF_MQTT_DHT.Controllers
         [Method("POST")]
         public void ChangePassword(WebServerEventArgs e)
         {
+#if DEBUG
             Debug.WriteLine("=== Processing POST request for change-password ===");
+#endif
 
             if (!this.IsAuthenticated(e))
             {
+#if DEBUG
                 Debug.WriteLine("Authentication failed for password change request");
+#endif
                 this.SendUnauthorizedResponse(e);
                 return;
             }
@@ -63,7 +69,9 @@ namespace ESP32_NF_MQTT_DHT.Controllers
             string body = null;
             try
             {
+#if DEBUG
                 Debug.WriteLine("Reading request body...");
+#endif
                 
                 string contentLengthHeader = e.Context.Request.Headers["Content-Length"];
                 int contentLength = 0;
@@ -72,44 +80,64 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                     int.TryParse(contentLengthHeader, out contentLength);
                 }
 
+#if DEBUG
                 Debug.WriteLine("Content-Length: " + contentLength);
+#endif
 
                 body = ReadPostDataSafely(e.Context.Request.InputStream, contentLength);
 
+#if DEBUG
                 int bodyLength = body != null ? body.Length : 0;
                 Debug.WriteLine("Form data received: " + bodyLength + " chars");
                 Debug.WriteLine("Raw form data: " + (body ?? "null"));
+#endif
 
                 var credentials = this.ParseFormData(body);
+#if DEBUG
                 string usernameInfo = credentials.Username != null ? credentials.Username : "null";
                 int passwordLength = credentials.Password != null ? credentials.Password.Length : 0;
                 Debug.WriteLine("Parsed credentials - Username: " + usernameInfo + ", Password length: " + passwordLength);
+#endif
                 
                 if (string.IsNullOrEmpty(credentials.Username) || string.IsNullOrEmpty(credentials.Password))
                 {
+#if DEBUG
                     Debug.WriteLine("Empty credentials provided - sending error response");
+#endif
                     this.SendResponse(e, ErrorHtml, "text/html");
                     return;
                 }
 
+#if DEBUG
                 Debug.WriteLine("Updating credentials for username: " + credentials.Username);
+#endif
                 CredentialCache.Update(credentials.Username, credentials.Password);
+#if DEBUG
                 Debug.WriteLine("Credentials updated successfully - sending success response");
+#endif
 
                 this.SendResponse(e, SuccessHtml, "text/html");
+#if DEBUG
                 Debug.WriteLine("Success response sent");
+#endif
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("ERROR processing form: " + ex.Message);
                 Debug.WriteLine("Exception type: " + ex.GetType().Name);
+#endif
                 LogHelper.LogError("Error processing password change", ex);
                 this.SendResponse(e, ProcessingErrorHtml, "text/html");
+#if DEBUG
                 Debug.WriteLine("Error response sent");
+#endif
             }
             finally
             {
+#if DEBUG
                 Debug.WriteLine("=== Finished processing POST request ===");
+#endif
             }
         }
 
@@ -133,55 +161,96 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                 return null;
             }
 
-            var sb = new StringBuilder();
-            for (int i = 0; i < value.Length; i++)
+            return UrlDecode(value, 0, value.Length);
+        }
+
+        private static string UrlDecode(string value, int start, int length)
+        {
+            if (value == null)
             {
-                if (value[i] == '%' && i + 2 < value.Length)
-                {
-                    try
-                    {
-                        string hex = value.Substring(i + 1, 2);
-                        sb.Append((char)Convert.ToInt32(hex, 16));
-                        i += 2;
-                    }
-                    catch
-                    {
-                        sb.Append(value[i]);
-                    }
-                }
-                else if (value[i] == '+')
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    sb.Append(value[i]);
-                }
+                return null;
             }
+
+            if (length <= 0)
+            {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder(length);
+            int end = start + length;
+            for (int i = start; i < end; i++)
+            {
+                char c = value[i];
+                if (c == '%' && i + 2 < end)
+                {
+                    int hi = HexToInt(value[i + 1]);
+                    int lo = HexToInt(value[i + 2]);
+                    if (hi >= 0 && lo >= 0)
+                    {
+                        sb.Append((char)((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+
+                    sb.Append('%');
+                    continue;
+                }
+
+                sb.Append(c == '+' ? ' ' : c);
+            }
+
             return sb.ToString();
+        }
+
+        private static int HexToInt(char c)
+        {
+            if (c >= '0' && c <= '9')
+            {
+                return c - '0';
+            }
+
+            if (c >= 'a' && c <= 'f')
+            {
+                return 10 + (c - 'a');
+            }
+
+            if (c >= 'A' && c <= 'F')
+            {
+                return 10 + (c - 'A');
+            }
+
+            return -1;
         }
 
         private static string ReadPostDataSafely(Stream inputStream, int contentLength)
         {
+#if DEBUG
             Debug.WriteLine("Attempting to read POST data safely");
+#endif
 
             try
             {
                 string result = ReadPostData(inputStream, contentLength);
                 if (!string.IsNullOrEmpty(result))
                 {
+#if DEBUG
                     Debug.WriteLine("Method 1 (chunked reading) succeeded");
+#endif
                     return result;
                 }
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("Method 1 failed: " + ex.Message);
+#endif
             }
 
             try
             {
+#if DEBUG
                 Debug.WriteLine("Trying Method 2: StreamReader with timeout");
+#endif
                 using (var reader = new StreamReader(inputStream))
                 {
                     var startTime = DateTime.UtcNow;
@@ -202,15 +271,12 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                             }
 
                             sb.Append(buffer, 0, charsRead);
-
-                            if (sb.Length > 10 && sb.ToString().Contains("username=") && sb.ToString().Contains("password="))
-                            {
-                                break;
-                            }
                         }
                         catch (Exception readEx)
                         {
+#if DEBUG
                             Debug.WriteLine("Read exception in Method 2: " + readEx.Message);
+#endif
                             break;
                         }
                     }
@@ -218,17 +284,23 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                     string result = sb.ToString();
                     if (!string.IsNullOrEmpty(result))
                     {
+#if DEBUG
                         Debug.WriteLine("Method 2 (StreamReader with timeout) succeeded");
+#endif
                         return result;
                     }
                 }
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("Method 2 failed: " + ex.Message);
+#endif
             }
 
+#if DEBUG
             Debug.WriteLine("All read methods failed, returning empty string");
+#endif
             return string.Empty;
         }
 
@@ -236,18 +308,24 @@ namespace ESP32_NF_MQTT_DHT.Controllers
         {
             try
             {
+#if DEBUG
                 Debug.WriteLine("Reading POST data with content length: " + contentLength);
+#endif
 
                 // Set a reasonable timeout for the stream operation
                 if (inputStream.CanTimeout)
                 {
                     inputStream.ReadTimeout = 5000; // 5 seconds timeout
+#if DEBUG
                     Debug.WriteLine("Set stream read timeout to 5 seconds");
+#endif
                 }
 
                 if (contentLength <= 0 || contentLength > 4096)
                 {
+#if DEBUG
                     Debug.WriteLine("Invalid content length, attempting to read with buffer");
+#endif
                     contentLength = 1024;
                 }
 
@@ -267,21 +345,29 @@ namespace ESP32_NF_MQTT_DHT.Controllers
 
                         if (bytesRead == 0)
                         {
+#if DEBUG
                             Debug.WriteLine("No more data available, breaking read loop at attempt " + attempts);
+#endif
                             break;
                         }
 
                         totalBytesRead += bytesRead;
+#if DEBUG
                         Debug.WriteLine("Attempt " + attempts + ": Read " + bytesRead + " bytes, total: " + totalBytesRead);
+#endif
                     }
                     catch (IOException ioEx)
                     {
+#if DEBUG
                         Debug.WriteLine("IO Exception during read attempt " + attempts + ": " + ioEx.Message);
+#endif
                         break;
                     }
                     catch (System.Net.Sockets.SocketException sockEx)
                     {
+#if DEBUG
                         Debug.WriteLine("Socket Exception during read attempt " + attempts + ": " + sockEx.Message);
+#endif
                         break;
                     }
                 }
@@ -289,19 +375,25 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                 if (totalBytesRead > 0)
                 {
                     string result = Encoding.UTF8.GetString(buffer, 0, totalBytesRead);
+#if DEBUG
                     Debug.WriteLine("Successfully read POST data: " + totalBytesRead + " bytes");
+#endif
                     return result;
                 }
                 else
                 {
+#if DEBUG
                     Debug.WriteLine("No POST data read after " + attempts + " attempts");
+#endif
                     return string.Empty;
                 }
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("Error reading POST data: " + ex.Message);
                 Debug.WriteLine("Exception type: " + ex.GetType().Name);
+#endif
                 return string.Empty;
             }
         }
@@ -316,25 +408,110 @@ namespace ESP32_NF_MQTT_DHT.Controllers
             string username = null;
             string password = null;
 
-            string[] parts = body.Split('&');
-            foreach (string part in parts)
+            // Fast single-pass parser for application/x-www-form-urlencoded
+            // Expected keys: username, password
+            int i = 0;
+            int len = body.Length;
+            while (i < len)
             {
-                string[] kv = part.Split('=');
-                if (kv.Length == 2)
+                int keyStart = i;
+                int keyEnd = -1;
+                int valueStart = -1;
+
+                // Find '=' or '&'
+                for (; i < len; i++)
                 {
-                    switch (kv[0])
+                    char c = body[i];
+                    if (c == '=')
                     {
-                        case "username":
-                            username = UrlDecode(kv[1]);
-                            break;
-                        case "password":
-                            password = UrlDecode(kv[1]);
-                            break;
+                        keyEnd = i;
+                        valueStart = i + 1;
+                        i++;
+                        break;
                     }
+                    if (c == '&')
+                    {
+                        // Key without value
+                        keyEnd = i;
+                        valueStart = -1;
+                        i++;
+                        break;
+                    }
+                }
+
+                if (keyEnd < 0)
+                {
+                    keyEnd = len;
+                }
+
+                int keyLength = keyEnd - keyStart;
+
+                // Find end of value (or end)
+                int valueEnd = len;
+                if (valueStart >= 0)
+                {
+                    for (; i < len; i++)
+                    {
+                        if (body[i] == '&')
+                        {
+                            valueEnd = i;
+                            i++;
+                            break;
+                        }
+                    }
+
+                    int valueLength = valueEnd - valueStart;
+                    if (valueLength < 0)
+                    {
+                        valueLength = 0;
+                    }
+
+                    if (keyLength == 8 && MatchesKey(body, keyStart, "username"))
+                    {
+                        username = UrlDecode(body, valueStart, valueLength);
+                    }
+                    else if (keyLength == 8 && MatchesKey(body, keyStart, "password"))
+                    {
+                        password = UrlDecode(body, valueStart, valueLength);
+                    }
+                }
+
+                if (username != null && password != null)
+                {
+                    break;
+                }
+
+                // If we reached end while scanning for '='
+                if (i >= len)
+                {
+                    break;
                 }
             }
 
             return new CredentialPair(username, password);
+        }
+
+        private static bool MatchesKey(string source, int start, string expected)
+        {
+            if (expected == null)
+            {
+                return false;
+            }
+
+            if (start < 0 || (start + expected.Length) > source.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < expected.Length; i++)
+            {
+                if (source[start + i] != expected[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
         
         private void SendSimpleResponse(WebServerEventArgs e, string message, string backLink)
@@ -352,11 +529,15 @@ namespace ESP32_NF_MQTT_DHT.Controllers
                 response.StatusCode = (int)HttpStatusCode.Redirect;
                 response.Headers.Add("Location", location);
                 response.Close();
+#if DEBUG
                 Debug.WriteLine("Redirect sent to " + location);
+#endif
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("Error sending redirect: " + ex.Message);
+#endif
                 LogHelper.LogError("Error sending redirect", ex);
             }
         }
