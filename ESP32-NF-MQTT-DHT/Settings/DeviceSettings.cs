@@ -4,6 +4,6 @@
     {
         public const string DeviceName = "ESP32-S3";
 
-        public const string Location = "Test room";
+        public const string Location = "TEST device";
     }
 }
