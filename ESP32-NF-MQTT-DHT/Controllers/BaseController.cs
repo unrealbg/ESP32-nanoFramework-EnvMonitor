@@ -22,7 +22,10 @@
         private static readonly TimeSpan BanDuration = TimeSpan.FromMinutes(5);
         private static readonly object SyncLock = new object();
 
-        private static readonly object StringBuilderLock = new object();
+        private const int MaxTrackedRequestKeys = 128;
+        private const int MaxBannedClients = 64;
+        private const int SweepEveryNRequests = 64;
+        private static int _requestCounter;
 
         protected void SendPage(WebServerEventArgs e, string page)
         {
@@ -94,27 +97,37 @@
             HttpListenerResponse response = null;
             try
             {
+#if DEBUG
                 Debug.WriteLine("Sending response with content type: " + contentType + ", status: " + statusCode);
+#endif
                 response = e.Context.Response;
                 response.StatusCode = (int)statusCode;
                 response.ContentType = contentType;
                 
                 WebServer.OutPutStream(response, content);
+#if DEBUG
                 Debug.WriteLine("Response sent successfully");
+#endif
             }
             catch (System.Net.Sockets.SocketException sockEx)
             {
+#if DEBUG
                 Debug.WriteLine("SocketException while sending response: " + sockEx.Message);
+#endif
                 LogHelper.LogError("SocketException while sending response: " + sockEx.Message);
             }
             catch (ObjectDisposedException)
             {
+#if DEBUG
                 Debug.WriteLine("Response object was already disposed");
+#endif
                 LogHelper.LogWarning("Response object was already disposed");
             }
             catch (Exception ex)
             {
+#if DEBUG
                 Debug.WriteLine("Failed to send response: " + ex.Message);
+#endif
                 LogHelper.LogError("Failed to send response: " + ex.Message);
             }
         }
@@ -130,28 +143,35 @@
             string clientIp = e.Context.Request.RemoteEndPoint != null && e.Context.Request.RemoteEndPoint.Address != null ? 
                              e.Context.Request.RemoteEndPoint.Address.ToString() : "Unknown";
 
+            var nowUtc = DateTime.UtcNow;
+
             lock (SyncLock)
             {
-                if (this.IsBanned(clientIp))
+                // Periodically clean up old entries to keep memory stable.
+                SweepIfNeeded(nowUtc);
+
+                EnforceCaps();
+
+                if (this.IsBanned(clientIp, nowUtc))
                 {
                     this.SendForbiddenResponse(e);
                     return;
                 }
 
-                if (this.ShouldThrottle(clientIp, endpoint))
+                if (this.ShouldThrottle(clientIp, endpoint, nowUtc))
                 {
-                    this.BanClient(clientIp);
+                    this.BanClient(clientIp, nowUtc);
                     this.SendThrottleResponse(e);
                     return;
                 }
 
-                this.CleanupOldRequests(clientIp, endpoint);
+                this.CleanupOldRequests(clientIp, endpoint, nowUtc);
             }
 
             try
             {
                 action.Invoke();
-                this.UpdateLastRequestTime(clientIp, endpoint);
+                this.UpdateLastRequestTime(clientIp, endpoint, nowUtc);
             }
             catch (Exception ex)
             {
@@ -230,16 +250,22 @@
             return arr;
         }
 
-        private void CleanupOldRequests(string clientIp, string endpoint)
+        private void CleanupOldRequests(string clientIp, string endpoint, DateTime nowUtc)
         {
             try
             {
-                string key = clientIp + "_" + endpoint;
-                DateTime threshold = DateTime.UtcNow.AddMinutes(-5);
-
-                if (RequestTimesByEndpoint.Contains(key))
+                if (clientIp == "Unknown")
                 {
-                    DateTime requestTime = (DateTime)RequestTimesByEndpoint[key];
+                    return;
+                }
+
+                string key = clientIp + "_" + endpoint;
+                DateTime threshold = nowUtc.AddMinutes(-5);
+
+                var requestTimeObj = RequestTimesByEndpoint[key];
+                if (requestTimeObj != null)
+                {
+                    DateTime requestTime = (DateTime)requestTimeObj;
                     if (requestTime < threshold)
                     {
                         RequestTimesByEndpoint.Remove(key);
@@ -252,14 +278,99 @@
             }
         }
 
-        private bool IsBanned(string clientIp)
+        private static void SweepIfNeeded(DateTime nowUtc)
+        {
+            _requestCounter++;
+            if ((_requestCounter % SweepEveryNRequests) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                if (BanList.Count > 0)
+                {
+                    var toRemove = new ArrayList();
+                    var banEnumerator = BanList.GetEnumerator();
+                    while (banEnumerator.MoveNext())
+                    {
+                        var entry = (DictionaryEntry)banEnumerator.Current;
+                        var banEnd = (DateTime)entry.Value;
+                        if (nowUtc > banEnd)
+                        {
+                            toRemove.Add(entry.Key);
+                        }
+                    }
+
+                    for (int i = 0; i < toRemove.Count; i++)
+                    {
+                        BanList.Remove(toRemove[i]);
+                    }
+                }
+
+                if (RequestTimesByEndpoint.Count > 0)
+                {
+                    DateTime threshold = nowUtc.AddMinutes(-5);
+                    var toRemove = new ArrayList();
+                    var reqEnumerator = RequestTimesByEndpoint.GetEnumerator();
+                    while (reqEnumerator.MoveNext())
+                    {
+                        var entry = (DictionaryEntry)reqEnumerator.Current;
+                        var lastRequest = (DateTime)entry.Value;
+                        if (lastRequest < threshold)
+                        {
+                            toRemove.Add(entry.Key);
+                        }
+                    }
+
+                    for (int i = 0; i < toRemove.Count; i++)
+                    {
+                        RequestTimesByEndpoint.Remove(toRemove[i]);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error sweeping request/ban tables", ex);
+            }
+        }
+
+        private static void EnforceCaps()
         {
             try
             {
-                if (BanList.Contains(clientIp))
+                if (RequestTimesByEndpoint.Count > MaxTrackedRequestKeys)
                 {
-                    DateTime banEndTime = (DateTime)BanList[clientIp];
-                    if (DateTime.UtcNow <= banEndTime)
+                    RequestTimesByEndpoint.Clear();
+                    LogHelper.LogWarning("Request tracking table cleared due to size cap.");
+                }
+
+                if (BanList.Count > MaxBannedClients)
+                {
+                    BanList.Clear();
+                    LogHelper.LogWarning("Ban list cleared due to size cap.");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error enforcing caps for request/ban tables", ex);
+            }
+        }
+
+        private bool IsBanned(string clientIp, DateTime nowUtc)
+        {
+            try
+            {
+                if (clientIp == "Unknown")
+                {
+                    return false;
+                }
+
+                var banEndTimeObj = BanList[clientIp];
+                if (banEndTimeObj != null)
+                {
+                    DateTime banEndTime = (DateTime)banEndTimeObj;
+                    if (nowUtc <= banEndTime)
                     {
                         Debug.WriteLine("Access denied for " + clientIp + ". Still banned.");
                         return true;
@@ -277,16 +388,22 @@
             }
         }
 
-        private bool ShouldThrottle(string clientIp, string endpoint)
+        private bool ShouldThrottle(string clientIp, string endpoint, DateTime nowUtc)
         {
             try
             {
+                if (clientIp == "Unknown")
+                {
+                    return false;
+                }
+
                 string key = clientIp + "_" + endpoint;
 
-                if (RequestTimesByEndpoint.Contains(key))
+                var lastRequestTimeObj = RequestTimesByEndpoint[key];
+                if (lastRequestTimeObj != null)
                 {
-                    DateTime lastRequestTime = (DateTime)RequestTimesByEndpoint[key];
-                    return DateTime.UtcNow - lastRequestTime < RequestInterval;
+                    DateTime lastRequestTime = (DateTime)lastRequestTimeObj;
+                    return nowUtc - lastRequestTime < RequestInterval;
                 }
 
                 return false;
@@ -298,11 +415,16 @@
             }
         }
 
-        private void BanClient(string clientIp)
+        private void BanClient(string clientIp, DateTime nowUtc)
         {
             try
             {
-                DateTime banUntil = DateTime.UtcNow.Add(BanDuration);
+                if (clientIp == "Unknown")
+                {
+                    return;
+                }
+
+                DateTime banUntil = nowUtc.Add(BanDuration);
                 BanList[clientIp] = banUntil;
                 LogHelper.LogWarning("Client " + clientIp + " has been banned until " + banUntil.ToString());
             }
@@ -312,12 +434,17 @@
             }
         }
 
-        private void UpdateLastRequestTime(string clientIp, string endpoint)
+        private void UpdateLastRequestTime(string clientIp, string endpoint, DateTime nowUtc)
         {
             try
             {
+                if (clientIp == "Unknown")
+                {
+                    return;
+                }
+
                 string key = clientIp + "_" + endpoint;
-                RequestTimesByEndpoint[key] = DateTime.UtcNow;
+                RequestTimesByEndpoint[key] = nowUtc;
             }
             catch (Exception ex)
             {
@@ -338,14 +465,14 @@
                 var decodedBytes = Convert.FromBase64String(encodedCredentials);
                 var credentials = Encoding.UTF8.GetString(decodedBytes, 0, decodedBytes.Length);
 
-                var parts = credentials.Split(':');
-                if (parts.Length != 2)
+                int separatorIndex = credentials.IndexOf(':');
+                if (separatorIndex <= 0 || separatorIndex >= credentials.Length - 1)
                 {
                     return false;
                 }
 
-                var username = parts[0];
-                var password = parts[1];
+                var username = credentials.Substring(0, separatorIndex);
+                var password = credentials.Substring(separatorIndex + 1);
 
                 return CredentialCache.Validate(username, password);
             }
