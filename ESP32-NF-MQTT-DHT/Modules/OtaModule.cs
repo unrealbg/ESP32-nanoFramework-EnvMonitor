@@ -16,6 +16,7 @@ namespace ESP32_NF_MQTT_DHT.Modules
     {
         private readonly IOtaService _otaService;
         private readonly object _stateLock = new object();
+        private readonly ManualResetEvent _stopSignal = new ManualResetEvent(false);
         private Thread _periodicThread;
         private bool _running;
 
@@ -36,6 +37,8 @@ namespace ESP32_NF_MQTT_DHT.Modules
                     _running = true;
                 }
 
+                _stopSignal.Reset();
+
                 _periodicThread = new Thread(this.Worker);
                 _periodicThread.Start();
                 LogHelper.LogInformation("OTA periodic check thread started");
@@ -48,6 +51,8 @@ namespace ESP32_NF_MQTT_DHT.Modules
             {
                 _running = false;
             }
+
+            _stopSignal.Set();
 
             if (_periodicThread != null)
             {
@@ -91,8 +96,11 @@ namespace ESP32_NF_MQTT_DHT.Modules
                     LogHelper.LogError("OTA periodic check failed: " + ex.Message);
                 }
 
-                // Daily check by default
-                Thread.Sleep(24 * 60 * 60 * 1000);
+                // Daily check by default, but allow Stop() to interrupt immediately.
+                if (_stopSignal.WaitOne(24 * 60 * 60 * 1000, false))
+                {
+                    break;
+                }
             }
         }
     }
