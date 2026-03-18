@@ -1,0 +1,42 @@
+# Copy to device as: I:\config\device.config
+# Format: key=value
+
+# Wi-Fi
+wifi.ssid=YOUR_WIFI_SSID
+wifi.password=YOUR_WIFI_PASSWORD
+
+# Feature toggles (runtime service profile)
+feature.sensor.enabled=true
+feature.mqtt.enabled=true
+feature.irc.enabled=true
+feature.tcp.enabled=false
+feature.web.enabled=false
+feature.otaMqtt.enabled=true
+feature.memoryMonitor.enabled=true
+feature.startupMemoryTrace.enabled=true
+
+# MQTT (optional)
+mqtt.broker=192.168.1.10
+mqtt.port=1883
+mqtt.tls=false
+mqtt.user=
+mqtt.pass=
+
+# Sensor selection (optional)
+# Valid values depend on build; common: SHTC3, DHT21, AHT10
+sensor.type=SHTC3
+
+# IRC bot (optional)
+irc.server=irc.unrealbg.com
+irc.port=6697
+irc.tls=true
+irc.channel=#your-channel
+irc.nick=ESP32Bot
+irc.user=esp32
+irc.realname=ESP32 nanoFramework Bot
+irc.pass=
+# Set to true only when I:\irc_root_ca.pem contains the server root CA.
+# If true and the file is missing, the bot falls back to insecure TLS automatically.
+irc.validateServerCertificate=true
+irc.ca.path=I:\irc_root_ca.pem
+irc.cmdprefix=!

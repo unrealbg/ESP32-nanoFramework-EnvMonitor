@@ -1,0 +1,17 @@
+{
+  "serialport": "COM8",
+  "files": [
+    {
+      "DestinationFilePath": "I:\\config\\device.config",
+      "SourceFilePath": "E:\\repos\\NF.Esp32.Mqtt.Dht21\\deploy\\device.config"
+    },
+    {
+      "DestinationFilePath": "I:\\config\\credentials.txt",
+      "SourceFilePath": "E:\\repos\\NF.Esp32.Mqtt.Dht21\\deploy\\credentials.txt"
+    },
+    {
+      "DestinationFilePath": "I:\\irc_root_ca.pem",
+      "SourceFilePath": "E:\\repos\\NF.Esp32.Mqtt.Dht21\\deploy\\irc_root_ca.pem"
+    }
+  ]
+}
