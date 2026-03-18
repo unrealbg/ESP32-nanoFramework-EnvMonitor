@@ -56,6 +56,12 @@
                     return;
                 }
 
+                if (!_connectionService.IsConnected)
+                {
+                    LogHelper.LogWarning("Web server start skipped: no active network connection.");
+                    return;
+                }
+
                 // Platform check
                 if (SystemInfo.TargetName != "ESP32_S3")
                 {

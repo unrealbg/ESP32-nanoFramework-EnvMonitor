@@ -11,22 +11,15 @@
     using nanoFramework.M2Mqtt.Messages;
     using nanoFramework.Runtime.Native;
 
-    using static ESP32_NF_MQTT_DHT.Settings.DeviceSettings;
-
     /// <summary>
     /// Handles incoming MQTT messages and performs actions based on the message content and topic.
     /// </summary>
     public class MqttMessageHandler
     {
-        private static readonly string RelayTopic = $"home/{DeviceName}/switch";
-        private static readonly string SystemTopic = $"home/{DeviceName}/system";
-        private static readonly string UptimeTopic = $"home/{DeviceName}/uptime";
-        private static readonly string ErrorTopic = $"home/{DeviceName}/errors";
-
-    private readonly IRelayService _relayService;
+        private readonly IRelayService _relayService;
         private readonly IUptimeService _uptimeService;
         private readonly IConnectionService _connectionService;
-    private readonly IOtaService _otaService;
+        private readonly IOtaService _otaService;
         private MqttClient _mqttClient;
 
         /// <summary>
@@ -51,16 +44,7 @@
         public void SetMqttClient(MqttClient mqttClient)
         {
             _mqttClient = mqttClient;
-            // give OTA service access to the connected client for status publishing
-            try
-            {
-                var setter = _otaService as ESP32_NF_MQTT_DHT.Services.OtaService;
-                setter?.SetMqttClient(mqttClient);
-            }
-            catch
-            {
-                // ignored
-            }
+            _otaService.SetMqttClient(mqttClient);
         }
 
         /// <summary>
@@ -73,85 +57,85 @@
             try
             {
                 var message = Encoding.UTF8.GetString(e.Message, 0, e.Message.Length);
+                var command = NormalizeMessage(message);
 
-                if (e.Topic == RelayTopic)
+                if (e.Topic == MqttConstants.RelayTopic)
                 {
-                    if (message.Contains("on"))
+                    if (command == "on")
                     {
                         _relayService.TurnOn();
-                        _mqttClient.Publish(RelayTopic + "/relay", Encoding.UTF8.GetBytes("ON"));
+                        this.Publish(MqttConstants.RelayTopic + "/relay", "ON");
                         LogHelper.LogInformation("Relay turned ON and message published");
                     }
-                    else if (message.Contains("off"))
+                    else if (command == "off")
                     {
                         _relayService.TurnOff();
-                        _mqttClient.Publish(RelayTopic + "/relay", Encoding.UTF8.GetBytes("OFF"));
+                        this.Publish(MqttConstants.RelayTopic + "/relay", "OFF");
                         LogHelper.LogInformation("Relay turned OFF and message published");
                     }
-                    else if (message.Contains("status"))
+                    else if (command == "status")
                     {
                         string status = _relayService.IsRelayOn() ? "ON" : "OFF";
-                        _mqttClient.Publish(RelayTopic + "/status", Encoding.UTF8.GetBytes(status));
+                        this.Publish(MqttConstants.RelayTopic + "/status", status);
                         LogHelper.LogInformation($"Relay status requested, published: {status}");
                     }
                 }
-                else if (e.Topic == SystemTopic)
+                else if (e.Topic == MqttConstants.SystemTopic)
                 {
-                    if (message.Contains("uptime"))
+                    if (command == "uptime")
                     {
                         string uptime = this._uptimeService.GetUptime();
-                        _mqttClient.Publish(UptimeTopic, Encoding.UTF8.GetBytes(uptime));
+                        this.Publish(MqttConstants.UptimeTopic, uptime);
                         LogHelper.LogInformation($"Uptime requested, published: {uptime}");
                     }
-                    else if (message.Contains("reboot"))
+                    else if (command == "reboot")
                     {
-                        _mqttClient.Publish($"home/{DeviceName}/maintenance", Encoding.UTF8.GetBytes($"Manual reboot at: {DateTime.UtcNow.ToString("HH:mm:ss")}"));
+                        this.Publish("home/" + Settings.DeviceSettings.DeviceName + "/maintenance", "Manual reboot at: " + DateTime.UtcNow.ToString("HH:mm:ss"));
                         LogHelper.LogInformation("Rebooting system...");
                         Thread.Sleep(2000);
                         Power.RebootDevice();
                     }
-                    else if (message.Contains("getip"))
+                    else if (command == "getip")
                     {
                         string ipAddress = this._connectionService.GetIpAddress();
-                        _mqttClient.Publish(SystemTopic + "/ip", Encoding.UTF8.GetBytes(ipAddress));
+                        this.Publish(MqttConstants.SystemTopic + "/ip", ipAddress);
                         LogHelper.LogInformation($"IP address requested, published: {ipAddress}");
                     }
-                    else if (message.Contains("firmware"))
+                    else if (command == "firmware")
                     {
                         Version firmwareVersion = SystemInfo.Version;
                         string versionString = $"{firmwareVersion.Major}.{firmwareVersion.Minor}.{firmwareVersion.Build}.{firmwareVersion.Revision}";
-                        _mqttClient.Publish(SystemTopic + "/firmware", Encoding.UTF8.GetBytes(versionString));
+                        this.Publish(MqttConstants.SystemTopic + "/firmware", versionString);
                         LogHelper.LogInformation($"Firmware version requested, published: {versionString}");
                     }
-                    else if (message.Contains("platform"))
+                    else if (command == "platform")
                     {
                         string platform = SystemInfo.Platform;
-                        _mqttClient.Publish(SystemTopic + "/platform", Encoding.UTF8.GetBytes(platform));
+                        this.Publish(MqttConstants.SystemTopic + "/platform", platform);
                         LogHelper.LogInformation($"Platform information requested, published: {platform}");
                     }
-                    else if (message.Contains("target"))
+                    else if (command == "target")
                     {
                         string target = SystemInfo.TargetName;
-                        _mqttClient.Publish(SystemTopic + "/target", Encoding.UTF8.GetBytes(target));
+                        this.Publish(MqttConstants.SystemTopic + "/target", target);
                         LogHelper.LogInformation($"Target information requested, published: {target}");
                     }
-                    else if (message.Contains("getLogs"))
+                    else if (command == "getlogs")
                     {
                         string logs = LogService.ReadLatestLogs();
-                        _mqttClient.Publish(SystemTopic + "/logs", Encoding.UTF8.GetBytes(logs));
+                        this.Publish(MqttConstants.SystemTopic + "/logs", logs);
                         LogHelper.LogInformation("Logs requested, published");
                     }
-                    else if (message.Contains("clearLogs"))
+                    else if (command == "clearlogs")
                     {
                         LogService.ClearLogs();
-                        _mqttClient.Publish(SystemTopic + "/logs", Encoding.UTF8.GetBytes("Logs cleared"));
+                        this.Publish(MqttConstants.SystemTopic + "/logs", "Logs cleared");
                         LogHelper.LogInformation("Logs cleared");
                     }
                 }
-                else if (e.Topic == ErrorTopic)
+                else if (e.Topic == MqttConstants.ErrorTopic)
                 {
-                    // Log the error message
-                    LogHelper.LogError(e.Message.ToString());
+                    LogHelper.LogError(message);
                 }
                 else if (e.Topic == ESP32_NF_MQTT_DHT.OTA.Config.TopicCmd)
                 {
@@ -162,6 +146,21 @@
             {
                 LogHelper.LogError($"Error handling incoming message: {ex.Message}");
             }
+        }
+
+        private void Publish(string topic, string payload)
+        {
+            if (_mqttClient == null || !_mqttClient.IsConnected || string.IsNullOrEmpty(topic) || payload == null)
+            {
+                return;
+            }
+
+            _mqttClient.Publish(topic, Encoding.UTF8.GetBytes(payload));
+        }
+
+        private static string NormalizeMessage(string message)
+        {
+            return string.IsNullOrEmpty(message) ? string.Empty : message.Trim().ToLower();
         }
     }
 }
