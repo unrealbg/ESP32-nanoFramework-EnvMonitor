@@ -20,7 +20,7 @@
         private readonly IConnectionService _connectionService;
         private readonly IServiceStartupManager _serviceStartupManager;
         private readonly IPlatformService _platformService;
-        private readonly IModuleManager _moduleManager;
+        private readonly IServiceProvider _serviceProvider;
 
         /// <summary>
         /// Loads the OTA server root CA certificate for TLS.
@@ -168,16 +168,12 @@
             IConnectionService connectionService,
             IServiceStartupManager serviceStartupManager,
             IPlatformService platformService,
-            IModuleManager moduleManager,
-            OtaModule otaModule) // keep built-in OTA module only
+            IServiceProvider serviceProvider)
         {
             _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
             _serviceStartupManager = serviceStartupManager ?? throw new ArgumentNullException(nameof(serviceStartupManager));
             _platformService = platformService ?? throw new ArgumentNullException(nameof(platformService));
-            _moduleManager = moduleManager ?? throw new ArgumentNullException(nameof(moduleManager));
-
-            // Register only built-in module(s)
-            _moduleManager.Register(otaModule);
+            _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
 
             LogHelper.LogInformation("Initializing application...");
             this.LogPlatformInfo();
@@ -185,26 +181,18 @@
 
         public void Run()
         {
-            // Load OTA root CA for TLS before any HTTPS requests
-            LoadOtaRootCa();
             try
             {
+                if (AppConfiguration.Features.EnableOtaOverMqtt || AppConfiguration.Features.EnableDynamicModuleLoading)
+                {
+                    // Load OTA root CA for TLS only when OTA/module loading is enabled.
+                    LoadOtaRootCa();
+                }
+
                 this.ValidateSystemRequirements();
                 this.EstablishConnection();
                 this.StartServices();
-
-                // Discover and register OTA-delivered modules before starting modules
-                try
-                {
-                    int n = (ESP32_NF_MQTT_DHT.Modules.ModuleManager)_moduleManager is ESP32_NF_MQTT_DHT.Modules.ModuleManager mm ? mm.LoadFromDirectory(Config.ModulesDir) : 0;
-                    LogHelper.LogInformation("Discovered and registered OTA modules: " + n);
-                }
-                catch (Exception ex)
-                {
-                    LogHelper.LogError("Module discovery failed: " + ex.Message);
-                }
-
-                _moduleManager.StartAll();
+                this.StartOptionalModules();
                 
                 LogHelper.LogInformation("Application startup completed successfully.");
             }
@@ -259,6 +247,13 @@
             try
             {
                 _connectionService.Connect();
+                if (!_connectionService.IsConnected)
+                {
+                    throw new ServiceStartupException(
+                        "ConnectionService",
+                        "Network connection was not established. Ensure Wi-Fi is configured (wifi.ssid/wifi.password) and reachable.");
+                }
+
                 LogHelper.LogInformation("Connection established successfully.");
             }
             catch (Exception ex)
@@ -280,6 +275,49 @@
             {
                 throw new ServiceStartupException("ServiceStartupManager", $"Failed to start services: {ex.Message}", ex);
             }
+        }
+
+        private void StartOptionalModules()
+        {
+            bool enableOtaModule = AppConfiguration.Features.EnableOtaOverMqtt;
+            bool enableDynamicModules = AppConfiguration.Features.EnableDynamicModuleLoading;
+
+            if (!enableOtaModule && !enableDynamicModules)
+            {
+                LogHelper.LogInformation("Optional module loading disabled - skipping module startup.");
+                return;
+            }
+
+            var moduleManager = _serviceProvider.GetService(typeof(IModuleManager)) as IModuleManager;
+            if (moduleManager == null)
+            {
+                LogHelper.LogWarning("ModuleManager is unavailable - skipping optional modules.");
+                return;
+            }
+
+            if (enableOtaModule)
+            {
+                var otaModule = _serviceProvider.GetService(typeof(OtaModule)) as OtaModule;
+                if (otaModule != null)
+                {
+                    moduleManager.Register(otaModule);
+                }
+            }
+
+            if (enableDynamicModules)
+            {
+                try
+                {
+                    int count = moduleManager.LoadFromDirectory(Config.ModulesDir);
+                    LogHelper.LogInformation("Discovered and registered OTA modules: " + count);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.LogError("Module discovery failed: " + ex.Message);
+                }
+            }
+
+            moduleManager.StartAll();
         }
 
         private void LogPlatformInfo()
