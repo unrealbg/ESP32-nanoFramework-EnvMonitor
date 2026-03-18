@@ -1,20 +1,22 @@
 ﻿namespace ESP32_NF_MQTT_DHT.OTA
 {
+    using ESP32_NF_MQTT_DHT.Settings;
+
     internal static class Config
     {
         // Identity
-    public static string DeviceId = ESP32_NF_MQTT_DHT.Settings.DeviceSettings.DeviceName;
+        public static string DeviceId => DeviceSettings.DeviceName;
 
         // MQTT broker
-    public static string BrokerHost = ESP32_NF_MQTT_DHT.Settings.MqttSettings.Broker;
-    public static int BrokerPort = ESP32_NF_MQTT_DHT.Settings.MqttSettings.Port;
-    public static bool BrokerTls = ESP32_NF_MQTT_DHT.Settings.MqttSettings.UseTls;
-    public static string BrokerUser = ESP32_NF_MQTT_DHT.Settings.MqttSettings.ClientUsername;
-    public static string BrokerPass = ESP32_NF_MQTT_DHT.Settings.MqttSettings.ClientPassword;
+        public static string BrokerHost => MqttSettings.Broker;
+        public static int BrokerPort => MqttSettings.Port;
+        public static bool BrokerTls => MqttSettings.UseTls;
+        public static string BrokerUser => MqttSettings.ClientUsername;
+        public static string BrokerPass => MqttSettings.ClientPassword;
 
         // Topics
-    public static string TopicCmd = "home/" + DeviceId + "/ota/cmd";
-    public static string TopicStatus = "home/" + DeviceId + "/ota/status";
+        public static string TopicCmd => "home/" + DeviceId + "/ota/cmd";
+        public static string TopicStatus => "home/" + DeviceId + "/ota/status";
 
         // Periodic check URL (empty to disable)
         public static string PeriodicManifestUrl = ""; // e.g., https://cdn.example.com/env/manifest-latest.json
