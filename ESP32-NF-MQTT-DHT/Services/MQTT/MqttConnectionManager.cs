@@ -18,12 +18,13 @@
         /// <summary>
         /// Connects to the MQTT broker.
         /// </summary>
-        public bool Connect(string broker, string clientId, string user, string pass)
+        public bool Connect(string broker, int port, bool useTls, string clientId, string user, string pass)
         {
             try
             {
-                LogHelper.LogInformation($"Connecting to MQTT broker: {broker}...");
-                this.MqttClient = new MqttClient(broker);
+                LogHelper.LogInformation($"Connecting to MQTT broker: {broker}:{port} (TLS: {useTls})...");
+                var sslProtocol = useTls ? MqttSslProtocols.TLSv1_2 : MqttSslProtocols.None;
+                this.MqttClient = new MqttClient(broker, port, useTls, null, null, sslProtocol);
                 this.MqttClient.Connect(clientId, user, pass);
 
                 if (this.MqttClient.IsConnected)

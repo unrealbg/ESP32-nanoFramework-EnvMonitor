@@ -12,21 +12,12 @@
     using nanoFramework.Json;
     using nanoFramework.M2Mqtt;
 
-    using static ESP32_NF_MQTT_DHT.Settings.DeviceSettings;
-
     /// <summary>
     /// Service responsible for publishing sensor data and error messages to an MQTT broker.
     /// </summary>
     public class MqttPublishService : IMqttPublishService, IDisposable
     {
-        private const int ErrorInterval = 10000;
         private const int HeartbeatInterval = 30000;
-
-        private static readonly string DataTopic = $"home/{DeviceName}/messages";
-        private static readonly string ErrorTopic = $"home/{DeviceName}/errors";
-        private static readonly string SystemTopic = $"home/{DeviceName}/system/status";
-
-        private readonly ManualResetEvent _stopSignal = new ManualResetEvent(false);
         private readonly ManualResetEvent _heartbeatStopSignal = new ManualResetEvent(false);
         private readonly object _heartbeatLock = new object();
         private readonly object _clientLock = new object();
@@ -161,7 +152,7 @@
                 if (data != null)
                 {
                     var message = JsonSerializer.SerializeObject(data);
-                    this.CheckInternetAndPublish(DataTopic, message);
+                    this.CheckInternetAndPublish(MqttConstants.DataTopic, message);
                 }
                 else
                 {
@@ -196,8 +187,12 @@
             
             try
             {
-                this.CheckInternetAndPublish(ErrorTopic, errorMessage);
-                _stopSignal.WaitOne(ErrorInterval, false);
+                if (string.IsNullOrEmpty(errorMessage))
+                {
+                    return;
+                }
+
+                this.CheckInternetAndPublish(MqttConstants.ErrorTopic, errorMessage);
             }
             catch (Exception ex)
             {
@@ -219,12 +214,7 @@
             try
             {
                 StopHeartbeat();
-                
-                if (_stopSignal != null)
-                {
-                    _stopSignal.Set();
-                }
-                
+
                 if (_heartbeatStopSignal != null)
                 {
                     _heartbeatStopSignal.Set();
@@ -267,10 +257,16 @@
                     return;
                 }
 
+                if (!client.IsConnected)
+                {
+                    LogHelper.LogWarning("Heartbeat skipped: MQTT client is not connected.");
+                    return;
+                }
+
                 if (_internetConnectionService.IsInternetAvailable())
                 {
                     string message = "online";
-                    client.Publish(SystemTopic, Encoding.UTF8.GetBytes(message));
+                    client.Publish(MqttConstants.SystemStatusTopic, Encoding.UTF8.GetBytes(message));
                     LogHelper.LogInformation($"Heartbeat sent: {message}");
                 }
                 else
@@ -298,22 +294,21 @@
             
             try
             {
+                MqttClient client;
+                lock (_clientLock)
+                {
+                    client = _mqttClient;
+                }
+
+                if (client == null || !client.IsConnected)
+                {
+                    LogHelper.LogWarning("MQTT client is not connected.");
+                    return;
+                }
+
                 if (_internetConnectionService.IsInternetAvailable())
                 {
-                    MqttClient client;
-                    lock (_clientLock)
-                    {
-                        client = _mqttClient;
-                    }
-
-                    if (client != null && client.IsConnected)
-                    {
-                        client.Publish(topic, Encoding.UTF8.GetBytes(message));
-                    }
-                    else
-                    {
-                        LogHelper.LogWarning("MQTT client is not connected.");
-                    }
+                    client.Publish(topic, Encoding.UTF8.GetBytes(message));
                 }
                 else
                 {

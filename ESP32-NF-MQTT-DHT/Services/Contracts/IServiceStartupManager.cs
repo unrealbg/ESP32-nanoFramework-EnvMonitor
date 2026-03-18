@@ -11,7 +11,14 @@ namespace ESP32_NF_MQTT_DHT.Services.Contracts
         void StartAllServices();
 
         /// <summary>
-        /// Starts a specific service by name.
+        /// Starts a specific service.
+        /// </summary>
+        /// <param name="service">The service to start.</param>
+        void StartService(StartupService service);
+
+        /// <summary>
+        /// Starts a specific service by name (legacy overload).
+        /// Prefer <see cref="StartService(StartupService)"/>.
         /// </summary>
         /// <param name="serviceName">The name of the service to start.</param>
         void StartService(string serviceName);

@@ -13,6 +13,8 @@
     {
         private const int DataPin = 22;
         private const int ClockPin = 23;
+        private I2cDevice _device;
+        private Aht10 _sensor;
 
         /// <summary>
         /// Gets the type of the sensor.
@@ -27,7 +29,19 @@
         {
             Configuration.SetPinFunction(DataPin, DeviceFunction.I2C1_DATA);
             Configuration.SetPinFunction(ClockPin, DeviceFunction.I2C1_CLOCK);
+            var settings = new I2cConnectionSettings(1, AhtBase.DefaultI2cAddress);
+            _device = I2cDevice.Create(settings);
+            _sensor = new Aht10(_device);
             base.Start();
+        }
+
+        public override void Stop()
+        {
+            base.Stop();
+            _sensor?.Dispose();
+            _sensor = null;
+            _device?.Dispose();
+            _device = null;
         }
 
         /// <summary>
@@ -35,22 +49,23 @@
         /// </summary>
         protected override void ReadSensorData()
         {
-            I2cConnectionSettings settings = new I2cConnectionSettings(1, AhtBase.DefaultI2cAddress);
-            using (I2cDevice i2cDevice = I2cDevice.Create(settings))
-            using (var aht = new Aht10(i2cDevice))
+            if (_sensor == null)
             {
-                double temp = aht.GetTemperature().DegreesCelsius;
-                double humid = aht.GetHumidity().Percent;
+                this.SetErrorValues();
+                return;
+            }
 
-                if (temp < 45 && temp != -50)
-                {
-                    _temperature = temp;
-                    _humidity = humid;
-                }
-                else
-                {
-                    this.SetErrorValues();
-                }
+            double temp = _sensor.GetTemperature().DegreesCelsius;
+            double humid = _sensor.GetHumidity().Percent;
+
+            if (temp < 45 && temp != -50)
+            {
+                _temperature = temp;
+                _humidity = humid;
+            }
+            else
+            {
+                this.SetErrorValues();
             }
         }
     }

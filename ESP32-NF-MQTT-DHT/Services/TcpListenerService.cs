@@ -693,7 +693,29 @@
                         break;
                     }
 
-                    LogHelper.LogInformation("Command received from " + authenticatedUser + "@" + clientIp + ": " + input);
+                    string safeInputForLog = input;
+                    try
+                    {
+                        string trimmed = input.Trim();
+                        if (trimmed.StartsWith("changepassword ") || trimmed == "changepassword")
+                        {
+                            string[] p = trimmed.Split(' ');
+                            if (p.Length >= 2)
+                            {
+                                safeInputForLog = "changepassword " + p[1] + " ***";
+                            }
+                            else
+                            {
+                                safeInputForLog = "changepassword ***";
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        safeInputForLog = "(unavailable)";
+                    }
+
+                    LogHelper.LogInformation("Command received from " + authenticatedUser + "@" + clientIp + ": " + safeInputForLog);
 
                     string[] parts = input.Trim().Split(' ');
                     if (parts.Length == 0)

@@ -11,8 +11,8 @@
     /// </summary>
     internal class Shtc3SensorService : BaseSensorService
     {
-        private const int DataPin = 8;
-        private const int ClockPin = 9;
+        private const int DataPin = 17;
+        private const int ClockPin = 18;
         private I2cDevice _device;
         private Shtc3 _sensor;
 

@@ -9,7 +9,7 @@
     {
         MqttClient MqttClient { get; }
 
-        bool Connect(string broker, string clientId, string username, string password);
+        bool Connect(string broker, int port, bool useTls, string clientId, string username, string password);
 
         void Disconnect();
     }

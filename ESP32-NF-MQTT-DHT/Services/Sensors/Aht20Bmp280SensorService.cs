@@ -20,6 +20,10 @@
         private const int DataPin = 17;
         private const int ClockPin = 18;
         private double _pressure = InvalidPressure;
+        private I2cDevice _aht20Device;
+        private I2cDevice _bmp280Device;
+        private Aht20 _aht20;
+        private Bmp280 _bmp280;
 
         /// <summary>
         /// Gets the sensor data including temperature, humidity, and pressure.
@@ -46,7 +50,33 @@
         {
             Configuration.SetPinFunction(DataPin, DeviceFunction.I2C1_DATA);
             Configuration.SetPinFunction(ClockPin, DeviceFunction.I2C1_CLOCK);
+
+            I2cConnectionSettings settingsAht20 = new I2cConnectionSettings(1, AhtBase.DefaultI2cAddress);
+            I2cConnectionSettings settingsBmp280 = new I2cConnectionSettings(1, Bmx280Base.DefaultI2cAddress);
+
+            _aht20Device = I2cDevice.Create(settingsAht20);
+            _bmp280Device = I2cDevice.Create(settingsBmp280);
+            _aht20 = new Aht20(_aht20Device);
+            _bmp280 = new Bmp280(_bmp280Device);
+            _bmp280.TemperatureSampling = Sampling.UltraHighResolution;
+            _bmp280.PressureSampling = Sampling.UltraHighResolution;
+            _bmp280.FilterMode = Bmx280FilteringMode.X4;
+            _bmp280.Reset();
+
             base.Start();
+        }
+
+        public override void Stop()
+        {
+            base.Stop();
+            _bmp280?.Dispose();
+            _bmp280 = null;
+            _aht20?.Dispose();
+            _aht20 = null;
+            _bmp280Device?.Dispose();
+            _bmp280Device = null;
+            _aht20Device?.Dispose();
+            _aht20Device = null;
         }
 
         /// <summary>
@@ -54,32 +84,25 @@
         /// </summary>
         protected override void ReadSensorData()
         {
-            I2cConnectionSettings settingsAht20 = new I2cConnectionSettings(1, AhtBase.DefaultI2cAddress);
-            I2cConnectionSettings settingsBmp280 = new I2cConnectionSettings(1, Bmx280Base.DefaultI2cAddress);
-
-            using (I2cDevice aht20Device = I2cDevice.Create(settingsAht20))
-            using (I2cDevice bmp280Device = I2cDevice.Create(settingsBmp280))
-            using (var aht20 = new Aht20(aht20Device))
-            using (var bmp280 = new Bmp280(bmp280Device))
+            if (_aht20 == null || _bmp280 == null)
             {
-                bmp280.TemperatureSampling = Sampling.UltraHighResolution;
-                bmp280.PressureSampling = Sampling.UltraHighResolution;
-                bmp280.FilterMode = Bmx280FilteringMode.X4;
-                bmp280.Reset();
+                this.SetErrorValues();
+                _pressure = InvalidPressure;
+                return;
+            }
 
-                _temperature = aht20.GetTemperature().DegreesCelsius;
-                _humidity = aht20.GetHumidity().Percent;
+            _temperature = _aht20.GetTemperature().DegreesCelsius;
+            _humidity = _aht20.GetHumidity().Percent;
 
-                var bmpReadResult = bmp280.Read();
-                if (bmpReadResult.TemperatureIsValid && bmpReadResult.PressureIsValid)
-                {
-                    _pressure = bmpReadResult.Pressure.Hectopascals;
-                    LogHelper.LogDebug($"Pressure: {_pressure} hPa");
-                }
-                else
-                {
-                    _pressure = InvalidPressure;
-                }
+            var bmpReadResult = _bmp280.Read();
+            if (bmpReadResult.TemperatureIsValid && bmpReadResult.PressureIsValid)
+            {
+                _pressure = bmpReadResult.Pressure.Hectopascals;
+                LogHelper.LogDebug($"Pressure: {_pressure} hPa");
+            }
+            else
+            {
+                _pressure = InvalidPressure;
             }
         }
     }

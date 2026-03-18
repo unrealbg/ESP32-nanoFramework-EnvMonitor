@@ -97,6 +97,17 @@
                 return;
             }
 
+            if (string.IsNullOrEmpty(SSID))
+            {
+                LogHelper.LogError("Cannot connect: WiFi SSID is not configured. Set 'wifi.ssid' in I:\\config\\device.config");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(Password))
+            {
+                LogHelper.LogWarning("WiFi password is empty. If this is not an open network, set 'wifi.password' in I:\\config\\device.config");
+            }
+
             if (this.IsAlreadyConnected(out var currentIp))
             {
                 LogHelper.LogInformation($"Already connected. IP: {currentIp}");

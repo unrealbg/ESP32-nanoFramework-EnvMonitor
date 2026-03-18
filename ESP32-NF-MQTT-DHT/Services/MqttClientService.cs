@@ -48,7 +48,6 @@
         private bool _isRunning;
         private bool _isHeartbeatRunning;
         private bool _isDisposed;
-        private bool _isWifiConnected = true;
 
         private EventHandler _internetLostHandler;
         private EventHandler _internetRestoredHandler;
@@ -232,7 +231,7 @@
                 if (!wifiReady || !internetReady)
                 {
                     this.SafeDisconnect();
-                    int wait = internetReady ? InternetCheckIntervalMs : 5000;
+                    int wait = wifiReady ? InternetCheckIntervalMs : 5000;
                     if (this.WaitForWake(wait))
                     {
                         break;
@@ -343,7 +342,7 @@
 
             try
             {
-                bool isConnected = _connectionManager.Connect(Broker, ClientId, ClientUsername, ClientPassword);
+                bool isConnected = _connectionManager.Connect(Broker, Port, UseTls, ClientId, ClientUsername, ClientPassword);
 
                 if (isConnected && this.MqttClient != null && this.MqttClient.IsConnected)
                 {
@@ -386,7 +385,9 @@
             this.MqttClient.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
 
             this.MqttClient.ConnectionClosed += this.ConnectionClosed;
-            this.MqttClient.Subscribe(new[] { "#", OTA.Config.TopicCmd }, new[] { MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce });
+            this.MqttClient.Subscribe(
+                new[] { MqttConstants.RelayTopic, MqttConstants.SystemTopic, OTA.Config.TopicCmd },
+                new[] { MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce });
             this.MqttClient.MqttMsgPublishReceived += _mqttMessageHandler.HandleIncomingMessage;
 
             _mqttMessageHandler.SetMqttClient(this.MqttClient);
@@ -419,8 +420,6 @@
 
             if (source == WifiSource)
             {
-                _isWifiConnected = isRestored;
-
                 if (isRestored)
                 {
                     LogHelper.LogInformation("WiFi restored.");
@@ -443,7 +442,6 @@
 
                     if (_connectionService.IsConnected)
                     {
-                        _isWifiConnected = true;
                         LogHelper.LogInformation("WiFi is now detected as connected, starting MQTT...");
                         _wakeSignal.Set();
                         this.Start();
@@ -592,7 +590,7 @@
         /// </summary>
         private void SafeDisconnect()
         {
-            var client = this.MqttClient;
+            var client = _connectionManager.MqttClient;
             if (client == null)
             {
                 return;
@@ -600,41 +598,23 @@
 
             try
             {
-                if (client.IsConnected)
-                {
-                    client.Disconnect();
-                }
+                client.ConnectionClosed -= this.ConnectionClosed;
+                client.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
             }
             catch (Exception ex)
             {
-                LogHelper.LogError($"Error while disconnecting MQTT client: {ex.Message}\n{ex}");
-                LogService.LogCritical($"Error while disconnecting MQTT client: {ex.Message}\n{ex}");
+                LogHelper.LogError($"Error while detaching MQTT handlers: {ex.Message}\n{ex}");
+                LogService.LogCritical($"Error while detaching MQTT handlers: {ex.Message}\n{ex}");
             }
             finally
             {
-                try
+                lock (_heartbeatLock)
                 {
-                    client.Dispose();
-                    LogHelper.LogInformation("MQTT client disconnected and disposed");
+                    _isHeartbeatRunning = false;
                 }
-                catch (ObjectDisposedException)
-                {
-                    LogHelper.LogWarning("MQTT client already disposed.");
-                }
-                catch (Exception ex)
-                {
-                    LogHelper.LogError($"Error while disposing MQTT client: {ex.Message}\n{ex}");
-                    LogService.LogCritical($"Error while disposing MQTT client: {ex.Message}\n{ex}");
-                }
-                finally
-                {
-                    lock (_heartbeatLock)
-                    {
-                        _isHeartbeatRunning = false;
-                    }
-                    _mqttPublishService.StopHeartbeat();
-                    _connectionManager.Disconnect();
-                }
+
+                _mqttPublishService.StopHeartbeat();
+                _connectionManager.Disconnect();
             }
         }
 

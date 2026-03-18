@@ -2,7 +2,6 @@
 {
     using System;
     using System.Diagnostics;
-    using System.Threading;
 
     using Helpers;
 
@@ -13,10 +12,6 @@
     /// </summary>
     public class UptimeService : IUptimeService
     {
-        private const int UptimeDelay = 60000;
-
-        private Timer _uptimeTimer;
-
         /// <summary>
         /// Initializes a new instance of the <see cref="UptimeService"/> class.
         /// </summary>
@@ -24,7 +19,6 @@
         {
             Stopwatch = new Stopwatch();
             Stopwatch.Start();
-            //_uptimeTimer = new Timer(this.UptimeTimerCallback, null, 0, UptimeDelay);
         }
 
         /// <summary>
@@ -44,23 +38,6 @@
         {
             var elapsed = Stopwatch.Elapsed;
             return $"{elapsed.Days} days, {elapsed.Hours} hours, {elapsed.Minutes} minutes, {elapsed.Seconds} seconds";
-        }
-
-        /// <summary>
-        /// Callback method for the uptime timer.
-        /// </summary>
-        /// <param name="state">The state object passed to the callback method.</param>
-        private void UptimeTimerCallback(object state)
-        {
-            try
-            {
-                var uptimeMessage = this.GetUptime();
-                LogHelper.LogInformation(uptimeMessage);
-            }
-            catch (Exception ex)
-            {
-                LogHelper.LogError(ex.Message);
-            }
         }
     }
 }

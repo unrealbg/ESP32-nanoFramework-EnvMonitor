@@ -6,6 +6,8 @@ namespace ESP32_NF_MQTT_DHT.Services
     using ESP32_NF_MQTT_DHT.Services.Contracts;
     using nanoFramework.Runtime.Native;
 
+    using GC = nanoFramework.Runtime.Native.GC;
+
     /// <summary>
     /// Provides platform-specific capabilities and checks for ESP32 devices.
     /// </summary>
@@ -27,18 +29,10 @@ namespace ESP32_NF_MQTT_DHT.Services
         public bool SupportsWebServer()
         {
             var platformName = this.PlatformName;
-            var requiredMemory = AppConfiguration.Platform.WebServerRequiredMemory;
-            var availableMemory = this.GetAvailableMemory();
-            
-            Helpers.LogHelper.LogInformation($"[WebServer Check] Platform: '{platformName}'");
-            Helpers.LogHelper.LogInformation($"[WebServer Check] Memory: {availableMemory} bytes (Required: {requiredMemory})");
-            
+
             bool platformSupported = IsSupportedPlatform(platformName);
-            bool memorySupported = this.HasSufficientMemory(requiredMemory);
-            
-            Helpers.LogHelper.LogInformation($"[WebServer Check] Result - Platform: {platformSupported}, Memory: {memorySupported}");
-            
-            return platformSupported && memorySupported;
+            Helpers.LogHelper.LogInformation($"[WebServer Check] Platform: '{platformName}', PlatformSupported: {platformSupported}");
+            return platformSupported;
         }
         
         /// <summary>
