@@ -6,6 +6,7 @@
     using nanoFramework.Logging.Debug;
 #endif
     using System;
+        using System.Diagnostics;
     using System.Text;
 
     /// <summary>
@@ -28,6 +29,7 @@
         /// Logs an informational message.
         /// </summary>
         /// <param name="message">The message to log.</param>
+        [Conditional("DEBUG")]
         public static void LogInformation(string message)
         {
 #if DEBUG
@@ -55,6 +57,15 @@
             }
             
             _logger.LogError(formattedMessage);
+#else
+                        if (ex != null)
+                        {
+                                Debug.WriteLine("[ERROR] " + message + " | Exception: " + ex.Message);
+                        }
+                        else
+                        {
+                                Debug.WriteLine("[ERROR] " + message);
+                        }
 #endif
         }
 
@@ -62,6 +73,7 @@
         /// Logs a warning message.
         /// </summary>
         /// <param name="message">The message to log.</param>
+        [Conditional("DEBUG")]
         public static void LogWarning(string message)
         {
 #if DEBUG
@@ -74,6 +86,7 @@
         /// Logs a debug message.
         /// </summary>
         /// <param name="message">The message to log.</param>
+        [Conditional("DEBUG")]
         public static void LogDebug(string message)
         {
 #if DEBUG

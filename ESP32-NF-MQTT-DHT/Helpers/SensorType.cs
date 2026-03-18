@@ -2,9 +2,11 @@
 {
     public enum SensorType
     {
-        DHT,
-        AHT,
-        SHTC3,
-        AHT20_BMP280
+        DHT = 0,
+        DHT21 = DHT,
+        AHT = 1,
+        AHT10 = AHT,
+        SHTC3 = 2,
+        AHT20_BMP280 = 3
     }
 }
