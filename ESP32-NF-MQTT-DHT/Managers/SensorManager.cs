@@ -15,15 +15,16 @@
     /// </summary>
     public class SensorManager : ISensorManager
     {
-        private readonly ISensorService[] _sensorServices;
+        private static string _firmwareVersion;
+        private readonly ISensorService _sensorService;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SensorManager"/> class.
         /// </summary>
-        /// <param name="sensorServices">An array of sensor services to manage.</param>
-        public SensorManager(ISensorService[] sensorServices)
+        /// <param name="sensorService">The active sensor service.</param>
+        public SensorManager(ISensorService sensorService)
         {
-            _sensorServices = sensorServices;
+            _sensorService = sensorService;
         }
 
         /// <summary>
@@ -32,29 +33,24 @@
         /// <returns>A <see cref="Device"/> object containing the sensor data, or <c>null</c> if the data is invalid.</returns>
         public Device CollectAndCreateSensorData()
         {
-            foreach (var sensor in _sensorServices)
+            var temperature = _sensorService.GetTemp();
+            var humidity = _sensorService.GetHumidity();
+            var sensorType = _sensorService.GetSensorType();
+
+            if (!double.IsNaN(temperature) && !double.IsNaN(humidity))
             {
-                var temperature = sensor.GetTemp();
-                var humidity = sensor.GetHumidity();
-                var sensorType = sensor.GetSensorType();
+                LogHelper.LogInformation($"{sensorType} - Temp: {temperature}°C, Humidity: {humidity}%");
 
-                if (!double.IsNaN(temperature) && !double.IsNaN(humidity))
+                return new Device
                 {
-                    LogHelper.LogInformation($"{sensorType} - Temp: {temperature}°C, Humidity: {humidity}%");
-                    Version firmwareVersion = SystemInfo.Version;
-                    string versionString = $"{firmwareVersion.Major}.{firmwareVersion.Minor}.{firmwareVersion.Build}.{firmwareVersion.Revision}";
-
-                    return new Device
-                    {
-                        DeviceName = DeviceSettings.DeviceName,
-                        Location = DeviceSettings.Location,
-                        SensorType = sensorType,
-                        DateTime = DateTime.UtcNow,
-                        Temp = Math.Round(temperature * 100) / 100,
-                        Humid = (int)humidity,
-                        Firmware = versionString
-                    };
-                }
+                    DeviceName = DeviceSettings.DeviceName,
+                    Location = DeviceSettings.Location,
+                    SensorType = sensorType,
+                    DateTime = DateTime.UtcNow,
+                    Temp = Math.Round(temperature * 100) / 100,
+                    Humid = (int)humidity,
+                    Firmware = GetFirmwareVersion()
+                };
             }
 
             LogHelper.LogWarning("Invalid data from sensors.");
@@ -66,10 +62,7 @@
         /// </summary>
         public void StartSensor()
         {
-            foreach (var sensor in _sensorServices)
-            {
-                sensor.Start();
-            }
+            _sensorService.Start();
         }
 
         /// <summary>
@@ -77,10 +70,29 @@
         /// </summary>
         public void StopSensor()
         {
-            foreach (var sensor in _sensorServices)
+            _sensorService.Stop();
+        }
+
+        private static string GetFirmwareVersion()
+        {
+            if (!string.IsNullOrEmpty(_firmwareVersion))
             {
-                sensor.Stop();
+                return _firmwareVersion;
             }
+
+            Version firmwareVersion = SystemInfo.Version;
+            if (firmwareVersion == null)
+            {
+                return "unknown";
+            }
+
+            _firmwareVersion =
+                firmwareVersion.Major + "." +
+                firmwareVersion.Minor + "." +
+                firmwareVersion.Build + "." +
+                firmwareVersion.Revision;
+
+            return _firmwareVersion;
         }
     }
 }
