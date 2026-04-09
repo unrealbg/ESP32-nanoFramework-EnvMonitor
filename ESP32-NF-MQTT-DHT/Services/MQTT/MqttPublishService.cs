@@ -263,16 +263,9 @@
                     return;
                 }
 
-                if (_internetConnectionService.IsInternetAvailable())
-                {
-                    string message = "online";
-                    client.Publish(MqttConstants.SystemStatusTopic, Encoding.UTF8.GetBytes(message));
-                    LogHelper.LogInformation($"Heartbeat sent: {message}");
-                }
-                else
-                {
-                    LogHelper.LogWarning("No internet connection for heartbeat.");
-                }
+                string message = "online";
+                client.Publish(MqttConstants.SystemStatusTopic, Encoding.UTF8.GetBytes(message));
+                LogHelper.LogInformation($"Heartbeat sent: {message}");
             }
             catch (Exception ex)
             {
@@ -306,14 +299,7 @@
                     return;
                 }
 
-                if (_internetConnectionService.IsInternetAvailable())
-                {
-                    client.Publish(topic, Encoding.UTF8.GetBytes(message));
-                }
-                else
-                {
-                    LogHelper.LogWarning("No internet connection.");
-                }
+                client.Publish(topic, Encoding.UTF8.GetBytes(message));
             }
             catch (Exception ex)
             {

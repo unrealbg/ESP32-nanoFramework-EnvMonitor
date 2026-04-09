@@ -13,6 +13,7 @@
     using nanoFramework.Hardware.Esp32;
     using nanoFramework.M2Mqtt;
     using nanoFramework.M2Mqtt.Messages;
+    using GC = nanoFramework.Runtime.Native.GC;
 
     using static Helpers.Constants;
     using static Settings.MqttSettings;
@@ -44,6 +45,7 @@
         private readonly object _stateLock = new object();
         private readonly object _randomLock = new object();
         private readonly object _heartbeatLock = new object();
+        private readonly object _disconnectReasonLock = new object();
 
         private bool _isRunning;
         private bool _isHeartbeatRunning;
@@ -57,6 +59,7 @@
         private Thread _workerThread;
 
         private readonly Random _random = new Random();
+        private string _lastDisconnectReason = "none";
 
         /// <summary>
         /// Initializes a new instance of the MqttClientService class.
@@ -226,12 +229,11 @@
                 }
 
                 bool wifiReady = this.EnsureWifiConnected();
-                bool internetReady = wifiReady && this.EnsureInternetAvailable();
 
-                if (!wifiReady || !internetReady)
+                if (!wifiReady)
                 {
                     this.SafeDisconnect();
-                    int wait = wifiReady ? InternetCheckIntervalMs : 5000;
+                    int wait = 5000;
                     if (this.WaitForWake(wait))
                     {
                         break;
@@ -245,6 +247,7 @@
                     if (this.AttemptBrokerConnection())
                     {
                         LogHelper.LogInformation("Connected to MQTT broker.");
+                        LogHelper.LogInformation($"MQTT reconnect diagnostics: last disconnect reason='{this.GetLastDisconnectReason()}', free memory={GC.Run(false)} bytes");
                         attemptCount = 0;
                         reconnectDelay = InitialReconnectDelayMs;
                         nextSensorPublish = DateTime.UtcNow;
@@ -317,7 +320,7 @@
         {
             LogHelper.LogWarning("Entering deep sleep to conserve power");
 
-            this.SafeDisconnect();
+            this.SafeDisconnect("Maximum reconnect attempts reached");
 
             _stopSignal.WaitOne(DeepSleepWaitMs, false);
 
@@ -333,11 +336,6 @@
         /// </summary>
         private bool AttemptBrokerConnection()
         {
-            if (!_internetConnectionService.IsInternetAvailable())
-            {
-                return false;
-            }
-
             this.SafeDisconnect();
 
             try
@@ -429,7 +427,7 @@
                 else
                 {
                     LogHelper.LogWarning("WiFi lost.");
-                    this.SafeDisconnect();
+                    this.SafeDisconnect("WiFi lost event");
                     _wakeSignal.Set();
                 }
             }
@@ -463,7 +461,6 @@
                 else
                 {
                     LogHelper.LogWarning("Internet lost.");
-                    this.SafeDisconnect();
                     _wakeSignal.Set();
                 }
             }
@@ -481,7 +478,7 @@
 
             LogHelper.LogWarning("Lost connection to MQTT broker, attempting to reconnect...");
 
-            this.SafeDisconnect();
+            this.SafeDisconnect("MQTT broker closed connection");
             _wakeSignal.Set();
         }
 
@@ -500,19 +497,6 @@
             catch (Exception ex)
             {
                 LogHelper.LogError($"WiFi check failed: {ex.Message}");
-                return false;
-            }
-        }
-
-        private bool EnsureInternetAvailable()
-        {
-            try
-            {
-                return _internetConnectionService.IsInternetAvailable();
-            }
-            catch (Exception ex)
-            {
-                LogHelper.LogError($"Internet availability check failed: {ex.Message}");
                 return false;
             }
         }
@@ -566,7 +550,11 @@
 
             try
             {
+                long memoryBeforePublish = GC.Run(false);
+                LogHelper.LogInformation($"Publish diagnostics: free memory before publish={memoryBeforePublish} bytes");
                 _mqttPublishService.PublishSensorData();
+                long memoryAfterPublish = GC.Run(false);
+                LogHelper.LogInformation($"Publish diagnostics: free memory after publish={memoryAfterPublish} bytes");
             }
             catch (Exception ex)
             {
@@ -590,7 +578,16 @@
         /// </summary>
         private void SafeDisconnect()
         {
+            this.SafeDisconnect("Unspecified disconnect");
+        }
+
+        private void SafeDisconnect(string reason)
+        {
             var client = _connectionManager.MqttClient;
+            this.SetLastDisconnectReason(reason);
+
+            LogHelper.LogWarning($"MQTT disconnect diagnostics: reason='{reason}', free memory={GC.Run(false)} bytes");
+
             if (client == null)
             {
                 return;
@@ -615,6 +612,22 @@
 
                 _mqttPublishService.StopHeartbeat();
                 _connectionManager.Disconnect();
+            }
+        }
+
+        private void SetLastDisconnectReason(string reason)
+        {
+            lock (_disconnectReasonLock)
+            {
+                _lastDisconnectReason = string.IsNullOrEmpty(reason) ? "unknown" : reason;
+            }
+        }
+
+        private string GetLastDisconnectReason()
+        {
+            lock (_disconnectReasonLock)
+            {
+                return _lastDisconnectReason;
             }
         }
 
