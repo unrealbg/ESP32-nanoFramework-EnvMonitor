@@ -17,6 +17,8 @@
         protected double _humidity = InvalidHumidity;
         protected bool _running;
         protected Timer _readTimer;
+        protected int _consecutiveReadFailures;
+        protected DateTime _lastSuccessfulReadUtc = DateTime.MinValue;
 
         /// <summary>
         /// Retrieves the sensor data.
@@ -98,13 +100,48 @@
             try
             {
                 this.ReadSensorData();
+
+                bool invalidReading = _temperature == InvalidTemperature ||
+                                      _humidity == InvalidHumidity ||
+                                      double.IsNaN(_temperature) ||
+                                      double.IsNaN(_humidity);
+
+                if (invalidReading)
+                {
+                    this.RegisterReadFailure("invalid sensor values");
+                    return;
+                }
+
+                this.RegisterReadSuccess();
             }
             catch (Exception ex)
             {
                 LogHelper.LogError($"Error reading sensor data in {this.GetSensorType()}: {ex.Message}");
                 this.SetErrorValues();
+                this.RegisterReadFailure(ex.Message);
 
                 _readTimer.Change(ErrorIntervalMs, ReadIntervalMs);
+            }
+        }
+
+        private void RegisterReadSuccess()
+        {
+            if (_consecutiveReadFailures > 0)
+            {
+                LogHelper.LogInformation($"{this.GetSensorType()} recovered after {_consecutiveReadFailures} failed read(s). Last success at {DateTime.UtcNow}.");
+            }
+
+            _consecutiveReadFailures = 0;
+            _lastSuccessfulReadUtc = DateTime.UtcNow;
+        }
+
+        private void RegisterReadFailure(string reason)
+        {
+            _consecutiveReadFailures++;
+
+            if (_consecutiveReadFailures == 1 || _consecutiveReadFailures % 5 == 0)
+            {
+                LogHelper.LogWarning($"{this.GetSensorType()} read failure #{_consecutiveReadFailures}. Reason: {reason}. Last successful read: {_lastSuccessfulReadUtc}");
             }
         }
     }
