@@ -60,6 +60,7 @@
         public virtual void Start()
         {
             _running = true;
+            RuntimeStateTracker.MarkProgress("sensor:start|" + this.GetSensorType());
             _readTimer = new Timer(this.ReadCallback, null, 0, ReadIntervalMs);
         }
 
@@ -69,6 +70,7 @@
         public virtual void Stop()
         {
             _running = false;
+            RuntimeStateTracker.MarkProgress("sensor:stop|" + this.GetSensorType());
             _readTimer?.Dispose();
         }
 
@@ -99,6 +101,7 @@
 
             try
             {
+                RuntimeStateTracker.MarkProgress("sensor:before-read|" + this.GetSensorType());
                 this.ReadSensorData();
 
                 bool invalidReading = _temperature == InvalidTemperature ||
@@ -108,16 +111,19 @@
 
                 if (invalidReading)
                 {
+                    RuntimeStateTracker.MarkProgress("sensor:invalid-read|" + this.GetSensorType());
                     this.RegisterReadFailure("invalid sensor values");
                     return;
                 }
 
+                RuntimeStateTracker.MarkProgress("sensor:after-read|" + this.GetSensorType());
                 this.RegisterReadSuccess();
             }
             catch (Exception ex)
             {
                 LogHelper.LogError($"Error reading sensor data in {this.GetSensorType()}: {ex.Message}");
                 this.SetErrorValues();
+                RuntimeStateTracker.MarkProgress("sensor:read-exception|" + this.GetSensorType());
                 this.RegisterReadFailure(ex.Message);
 
                 _readTimer.Change(ErrorIntervalMs, ReadIntervalMs);

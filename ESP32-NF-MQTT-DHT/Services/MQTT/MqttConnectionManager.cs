@@ -7,9 +7,14 @@
     using ESP32_NF_MQTT_DHT.Services.MQTT.Contracts;
 
     using nanoFramework.M2Mqtt;
+    using nanoFramework.M2Mqtt.Messages;
+
+    using static Settings.MqttSettings;
 
     internal class MqttConnectionManager : IMqttConnectionManager
     {
+        private const ushort KeepAliveSeconds = 60;
+
         /// <summary>
         /// Gets the MQTT client.
         /// </summary>
@@ -24,8 +29,34 @@
             {
                 LogHelper.LogInformation($"Connecting to MQTT broker: {broker}:{port} (TLS: {useTls})...");
                 var sslProtocol = useTls ? MqttSslProtocols.TLSv1_2 : MqttSslProtocols.None;
-                this.MqttClient = new MqttClient(broker, port, useTls, null, null, sslProtocol);
-                this.MqttClient.Connect(clientId, user, pass);
+
+                lock (MqttConstants.ClientSyncRoot)
+                {
+                    LogHelper.LogInformation("Creating MQTT client instance...");
+                    this.MqttClient = new MqttClient(broker, port, useTls, null, null, sslProtocol);
+                    LogHelper.LogInformation("MQTT client instance created.");
+
+                    if (UseLastWill)
+                    {
+                        LogHelper.LogInformation("Connecting MQTT client with Last Will enabled...");
+                        this.MqttClient.Connect(
+                            clientId,
+                            user,
+                            pass,
+                            true,
+                            MqttConstants.StatusQoS,
+                            true,
+                            MqttConstants.SystemStatusTopic,
+                            MqttConstants.OfflineStatusPayload,
+                            true,
+                            KeepAliveSeconds);
+                    }
+                    else
+                    {
+                        LogHelper.LogInformation("Connecting MQTT client with simple auth/keepalive path...");
+                        this.MqttClient.Connect(clientId, user, pass, true, KeepAliveSeconds);
+                    }
+                }
 
                 if (this.MqttClient.IsConnected)
                 {
@@ -55,12 +86,15 @@
             {
                 try
                 {
-                    if (this.MqttClient.IsConnected)
+                    lock (MqttConstants.ClientSyncRoot)
                     {
-                        this.MqttClient.Disconnect();
-                    }
+                        if (this.MqttClient.IsConnected)
+                        {
+                            this.MqttClient.Disconnect();
+                        }
 
-                    this.MqttClient.Dispose();
+                        this.MqttClient.Dispose();
+                    }
                 }
                 catch (Exception ex)
                 {

@@ -8,9 +8,14 @@
     using ESP32_NF_MQTT_DHT.Managers.Contracts;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
     using ESP32_NF_MQTT_DHT.Services.MQTT.Contracts;
+    using ESP32_NF_MQTT_DHT.Settings;
 
     using nanoFramework.Json;
     using nanoFramework.M2Mqtt;
+    using nanoFramework.M2Mqtt.Messages;
+    using GC = nanoFramework.Runtime.Native.GC;
+
+    using static ESP32_NF_MQTT_DHT.Helpers.Constants;
 
     /// <summary>
     /// Service responsible for publishing sensor data and error messages to an MQTT broker.
@@ -18,29 +23,45 @@
     public class MqttPublishService : IMqttPublishService, IDisposable
     {
         private const int HeartbeatInterval = 30000;
+        private const int InitialHeartbeatDelayMs = 5000;
         private readonly ManualResetEvent _heartbeatStopSignal = new ManualResetEvent(false);
         private readonly object _heartbeatLock = new object();
         private readonly object _clientLock = new object();
         private readonly object _runningLock = new object();
+        private readonly object _publishFailureLock = new object();
         
         private readonly ISensorManager _sensorManager;
         private readonly IInternetConnectionService _internetConnectionService;
+        private readonly IConnectionService _connectionService;
+        private readonly IUptimeService _uptimeService;
+        private readonly ISensorService _sensorService;
         
         private MqttClient _mqttClient;
         private Thread _heartbeatThread;
         
         private bool _isHeartbeatRunning = false;
         private bool _disposed = false;
+        private bool _publishFailureReported;
+
+        public event EventHandler PublishFailed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MqttPublishService"/> class.
         /// </summary>
         /// <param name="internetConnectionService">The internet connection service for checking internet availability.</param>
         /// <param name="sensorManager">The sensor manager for retrieving sensor data.</param>
-        public MqttPublishService(IInternetConnectionService internetConnectionService, ISensorManager sensorManager)
+        public MqttPublishService(
+            IInternetConnectionService internetConnectionService,
+            ISensorManager sensorManager,
+            IConnectionService connectionService,
+            IUptimeService uptimeService,
+            ISensorService sensorService)
         {
             _internetConnectionService = internetConnectionService ?? throw new ArgumentNullException(nameof(internetConnectionService));
             _sensorManager = sensorManager ?? throw new ArgumentNullException(nameof(sensorManager));
+            _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
+            _uptimeService = uptimeService ?? throw new ArgumentNullException(nameof(uptimeService));
+            _sensorService = sensorService ?? throw new ArgumentNullException(nameof(sensorService));
         }
 
         /// <summary>
@@ -54,6 +75,11 @@
             lock (_clientLock)
             {
                 _mqttClient = mqttClient;
+            }
+
+            lock (_publishFailureLock)
+            {
+                _publishFailureReported = false;
             }
         }
 
@@ -79,9 +105,18 @@
                 {
                     try
                     {
+                        RuntimeStateTracker.MarkProgress("mqtt:heartbeat-thread-start");
+
+                        if (_heartbeatStopSignal.WaitOne(InitialHeartbeatDelayMs, false))
+                        {
+                            return;
+                        }
+
                         while (_isHeartbeatRunning && !_disposed)
                         {
-                            PublishDeviceStatus();
+                            RuntimeStateTracker.MarkProgress("mqtt:heartbeat-publish-start");
+                            this.PublishPeriodicStatus();
+                            RuntimeStateTracker.MarkProgress("mqtt:heartbeat-publish-complete");
                             
                             if (_heartbeatStopSignal.WaitOne(HeartbeatInterval, false))
                             {
@@ -152,7 +187,7 @@
                 if (data != null)
                 {
                     var message = JsonSerializer.SerializeObject(data);
-                    this.CheckInternetAndPublish(MqttConstants.DataTopic, message);
+                    this.TryPublishMessage(MqttConstants.DataTopic, message, MqttQoSLevel.AtLeastOnce, false, true, "sensor data");
                 }
                 else
                 {
@@ -192,11 +227,45 @@
                     return;
                 }
 
-                this.CheckInternetAndPublish(MqttConstants.ErrorTopic, errorMessage);
+                this.TryPublishMessage(MqttConstants.ErrorTopic, errorMessage, MqttQoSLevel.AtLeastOnce, false, true, "error message");
             }
             catch (Exception ex)
             {
                 LogHelper.LogError($"Error publishing error message: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Publishes the state that survived the previous boot so short reconnect windows remain diagnosable.
+        /// </summary>
+        public void PublishRuntimeDiagnostics()
+        {
+            lock (_runningLock)
+            {
+                if (_disposed) return;
+            }
+
+            try
+            {
+                string payload = "boot; uptime=" + _uptimeService.GetUptime() +
+                                 "; freeMemory=" + GC.Run(false) +
+                                 "; previousState=" + RuntimeStateTracker.GetPreviousState() +
+                                 "; currentState=" + RuntimeStateTracker.GetLastState();
+
+                if (this.TryPublishMessage(
+                    MqttConstants.RuntimeStatusTopic,
+                    payload,
+                    MqttConstants.StatusQoS,
+                    true,
+                    false,
+                    "runtime diagnostics"))
+                {
+                    LogHelper.LogInformation("Runtime diagnostics published.");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error publishing runtime diagnostics: " + ex.Message);
             }
         }
 
@@ -224,6 +293,11 @@
                 {
                     _mqttClient = null;
                 }
+
+                lock (_publishFailureLock)
+                {
+                    PublishFailed = null;
+                }
                 
                 LogHelper.LogInformation("MqttPublishService disposed.");
             }
@@ -234,9 +308,9 @@
         }
 
         /// <summary>
-        /// Publishes the device status to the MQTT broker.
+        /// Publishes device health and subsystem statuses to the MQTT broker.
         /// </summary>
-        private void PublishDeviceStatus()
+        private void PublishPeriodicStatus()
         {
             lock (_runningLock)
             {
@@ -245,27 +319,30 @@
             
             try
             {
-                MqttClient client;
-                lock (_clientLock)
+                if (!this.TryPublishMessage(MqttConstants.SystemStatusTopic, MqttConstants.OnlineStatusPayload, MqttConstants.StatusQoS, true, true, "system status"))
                 {
-                    client = _mqttClient;
-                }
-
-                if (client == null)
-                {
-                    LogHelper.LogWarning("Heartbeat skipped: MQTT client is null.");
                     return;
                 }
 
-                if (!client.IsConnected)
+                if (!this.TryPublishMessage(MqttConstants.MqttStatusTopic, this.BuildMqttStatusPayload(), MqttConstants.StatusQoS, true, true, "mqtt status"))
                 {
-                    LogHelper.LogWarning("Heartbeat skipped: MQTT client is not connected.");
                     return;
                 }
 
-                string message = "online";
-                client.Publish(MqttConstants.SystemStatusTopic, Encoding.UTF8.GetBytes(message));
-                LogHelper.LogInformation($"Heartbeat sent: {message}");
+                if (!this.TryPublishMessage(MqttConstants.WifiStatusTopic, this.BuildWifiStatusPayload(), MqttConstants.StatusQoS, true, true, "wifi status"))
+                {
+                    return;
+                }
+
+                if (!this.TryPublishMessage(MqttConstants.SensorStatusTopic, this.BuildSensorStatusPayload(), MqttConstants.StatusQoS, true, true, "sensor status"))
+                {
+                    return;
+                }
+
+                if (this.TryPublishMessage(MqttConstants.HeartbeatTopic, this.BuildHeartbeatPayload(), MqttConstants.StatusQoS, false, true, "heartbeat"))
+                {
+                    LogHelper.LogInformation("Heartbeat sent.");
+                }
             }
             catch (Exception ex)
             {
@@ -274,15 +351,13 @@
         }
 
         /// <summary>
-        /// Checks internet availability and publishes a message to the specified topic.
+        /// Publishes a message to the specified topic and reports failures as MQTT health issues.
         /// </summary>
-        /// <param name="topic">The topic to publish the message to.</param>
-        /// <param name="message">The message to be published.</param>
-        private void CheckInternetAndPublish(string topic, string message)
+        private bool TryPublishMessage(string topic, string message, MqttQoSLevel qosLevel, bool retain, bool raiseFailureOnError, string context)
         {
             lock (_runningLock)
             {
-                if (_disposed) return;
+                if (_disposed) return false;
             }
             
             try
@@ -293,17 +368,114 @@
                     client = _mqttClient;
                 }
 
-                if (client == null || !client.IsConnected)
+                lock (MqttConstants.ClientSyncRoot)
                 {
-                    LogHelper.LogWarning("MQTT client is not connected.");
-                    return;
+                    if (client == null || !client.IsConnected)
+                    {
+                        LogHelper.LogWarning("MQTT publish skipped because the client is not connected. Context: " + context);
+                        if (raiseFailureOnError)
+                        {
+                            this.ReportPublishFailure();
+                        }
+
+                        return false;
+                    }
+
+                    client.Publish(topic, Encoding.UTF8.GetBytes(message), null, null, qosLevel, retain);
                 }
 
-                client.Publish(topic, Encoding.UTF8.GetBytes(message));
+                lock (_publishFailureLock)
+                {
+                    _publishFailureReported = false;
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
-                LogHelper.LogError($"Error in CheckInternetAndPublish: {ex.Message}");
+                LogHelper.LogError($"Error publishing {context}: {ex.Message}");
+                if (raiseFailureOnError)
+                {
+                    this.ReportPublishFailure();
+                }
+
+                return false;
+            }
+        }
+
+        private string BuildHeartbeatPayload()
+        {
+            string wifiState = _connectionService.IsConnected ? "connected" : "disconnected";
+            string sensorState = this.IsSensorReadingValid(_sensorService.GetTemp(), _sensorService.GetHumidity()) ? "ok" : "invalid";
+
+            return "alive; uptime=" + _uptimeService.GetUptime() +
+                   "; freeMemory=" + GC.Run(false) +
+                   "; wifi=" + wifiState +
+                   "; mqtt=connected" +
+                   "; sensor=" + sensorState;
+        }
+
+        private string BuildWifiStatusPayload()
+        {
+            if (!_connectionService.IsConnected)
+            {
+                return "disconnected";
+            }
+
+            return "connected; ip=" + _connectionService.GetIpAddress();
+        }
+
+        private string BuildMqttStatusPayload()
+        {
+            return "connected; clientId=" + Settings.MqttSettings.ClientId;
+        }
+
+        private string BuildSensorStatusPayload()
+        {
+            double temperature = _sensorService.GetTemp();
+            double humidity = _sensorService.GetHumidity();
+            string sensorType = _sensorService.GetSensorType();
+
+            if (!this.IsSensorReadingValid(temperature, humidity))
+            {
+                return "invalid; type=" + sensorType;
+            }
+
+            double roundedTemp = Math.Round(temperature * 100) / 100;
+            double roundedHumidity = Math.Round(humidity * 100) / 100;
+            return "ok; type=" + sensorType + "; temp=" + roundedTemp + "; humidity=" + roundedHumidity;
+        }
+
+        private bool IsSensorReadingValid(double temperature, double humidity)
+        {
+            return !double.IsNaN(temperature) &&
+                   !double.IsNaN(humidity) &&
+                   temperature != InvalidTemperature &&
+                   humidity != InvalidHumidity;
+        }
+
+        private void ReportPublishFailure()
+        {
+            EventHandler handler = null;
+
+            lock (_publishFailureLock)
+            {
+                if (_publishFailureReported || _disposed)
+                {
+                    return;
+                }
+
+                _publishFailureReported = true;
+                handler = PublishFailed;
+            }
+
+            try
+            {
+                handler?.Invoke(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error raising PublishFailed event: " + ex.Message);
             }
         }
 

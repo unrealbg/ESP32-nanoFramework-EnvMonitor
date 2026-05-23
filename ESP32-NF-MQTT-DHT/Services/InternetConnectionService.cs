@@ -3,6 +3,7 @@ namespace ESP32_NF_MQTT_DHT.Services
     using System;
     using System.Net;
     using System.Net.Sockets;
+    using System.Threading;
 
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
@@ -13,13 +14,25 @@ namespace ESP32_NF_MQTT_DHT.Services
         private static readonly IPAddress CloudflareDns = IPAddress.Parse("1.1.1.1");
 
         private const int CheckIntervalMs = 15000;
+        private const int MonitorThreadJoinTimeoutMs = 1000;
 
         private readonly object _syncLock = new object();
+        private readonly ManualResetEvent _stopSignal = new ManualResetEvent(false);
+        private readonly IConnectionService _connectionService;
+
+        private Thread _monitorThread;
 
         private bool _disposed;
         private bool _hasProbeResult;
         private bool _lastKnownInternetAvailable;
         private DateTime _lastProbeUtc = DateTime.MinValue;
+
+        public InternetConnectionService(IConnectionService connectionService)
+        {
+            _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
+            _monitorThread = new Thread(this.MonitorLoop);
+            _monitorThread.Start();
+        }
 
         public event EventHandler InternetLost;
         public event EventHandler InternetRestored;
@@ -27,6 +40,11 @@ namespace ESP32_NF_MQTT_DHT.Services
         public bool IsInternetAvailable()
         {
             ThrowIfDisposed();
+
+            if (!this.IsWifiConnected())
+            {
+                return false;
+            }
 
             lock (_syncLock)
             {
@@ -43,6 +61,8 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         public void Dispose()
         {
+            Thread monitorThread = null;
+
             lock (_syncLock)
             {
                 if (_disposed)
@@ -53,9 +73,43 @@ namespace ESP32_NF_MQTT_DHT.Services
                 _disposed = true;
                 InternetLost = null;
                 InternetRestored = null;
+                monitorThread = _monitorThread;
+                _monitorThread = null;
+            }
+
+            _stopSignal.Set();
+
+            if (monitorThread != null && monitorThread.IsAlive)
+            {
+                if (!monitorThread.Join(MonitorThreadJoinTimeoutMs))
+                {
+                    LogHelper.LogWarning("Internet monitor thread did not terminate within timeout.");
+                }
             }
 
             LogHelper.LogInformation("InternetConnectionService disposed.");
+        }
+
+        private void MonitorLoop()
+        {
+            while (true)
+            {
+                if (this.IsDisposed())
+                {
+                    return;
+                }
+
+                if (this.IsWifiConnected())
+                {
+                    bool isAvailable = this.TryCheckInternet();
+                    this.UpdateInternetState(isAvailable);
+                }
+
+                if (_stopSignal.WaitOne(CheckIntervalMs, false))
+                {
+                    return;
+                }
+            }
         }
 
         private bool TryCheckInternet()
@@ -153,6 +207,26 @@ namespace ESP32_NF_MQTT_DHT.Services
                 {
                     throw new ObjectDisposedException(nameof(InternetConnectionService));
                 }
+            }
+        }
+
+        private bool IsDisposed()
+        {
+            lock (_syncLock)
+            {
+                return _disposed;
+            }
+        }
+
+        private bool IsWifiConnected()
+        {
+            try
+            {
+                return _connectionService.IsConnected;
+            }
+            catch
+            {
+                return false;
             }
         }
     }

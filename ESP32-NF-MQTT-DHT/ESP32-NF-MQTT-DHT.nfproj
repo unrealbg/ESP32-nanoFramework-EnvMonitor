@@ -35,6 +35,7 @@
     <Compile Include="ExtensionAttribute.cs" />
     <Compile Include="Helpers\CredentialCache.cs" />
     <Compile Include="Helpers\DeviceConfig.cs" />
+    <Compile Include="Helpers\RuntimeStateTracker.cs" />
     <Compile Include="Modules\Contracts\IModule.cs" />
     <Compile Include="Modules\Contracts\IModuleManager.cs" />
     <Compile Include="Modules\ModuleManager.cs" />
