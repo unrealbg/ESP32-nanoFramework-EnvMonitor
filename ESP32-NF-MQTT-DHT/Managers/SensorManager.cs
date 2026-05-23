@@ -10,6 +10,8 @@
 
     using nanoFramework.Runtime.Native;
 
+    using static ESP32_NF_MQTT_DHT.Helpers.Constants;
+
     /// <summary>
     /// Manages sensor operations including data collection and validation.
     /// </summary>
@@ -37,7 +39,12 @@
             var humidity = _sensorService.GetHumidity();
             var sensorType = _sensorService.GetSensorType();
 
-            if (!double.IsNaN(temperature) && !double.IsNaN(humidity))
+            bool validReading = !double.IsNaN(temperature) &&
+                                !double.IsNaN(humidity) &&
+                                temperature != InvalidTemperature &&
+                                humidity != InvalidHumidity;
+
+            if (validReading)
             {
                 LogHelper.LogInformation($"{sensorType} - Temp: {temperature}°C, Humidity: {humidity}%");
 
@@ -53,7 +60,7 @@
                 };
             }
 
-            LogHelper.LogWarning("Invalid data from sensors.");
+            LogHelper.LogWarning($"Invalid data from sensors. Type={sensorType}, Temp={temperature}, Humidity={humidity}");
             return null;
         }
 

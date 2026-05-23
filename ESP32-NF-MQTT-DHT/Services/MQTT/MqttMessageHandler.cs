@@ -57,7 +57,8 @@
             try
             {
                 var message = Encoding.UTF8.GetString(e.Message, 0, e.Message.Length);
-                var command = NormalizeMessage(message);
+                var trimmedMessage = string.IsNullOrEmpty(message) ? string.Empty : message.Trim();
+                var command = NormalizeMessage(trimmedMessage);
 
                 if (e.Topic == MqttConstants.RelayTopic)
                 {
@@ -126,6 +127,63 @@
                         this.Publish(MqttConstants.SystemTopic + "/logs", logs);
                         LogHelper.LogInformation("Logs requested, published");
                     }
+                    else if (command == "getstate")
+                    {
+                        string state = "previous=" + RuntimeStateTracker.GetPreviousState() +
+                                       "\ncurrent=" + RuntimeStateTracker.GetLastState();
+                        this.Publish(MqttConstants.SystemTopic + "/state", state);
+                        LogHelper.LogInformation("Runtime state requested, published");
+                    }
+                    else if (command == "getconfig")
+                    {
+                        string config = DeviceConfig.GetSanitizedContent();
+                        this.Publish(MqttConstants.SystemTopic + "/config", config);
+                        LogHelper.LogInformation("Config requested, published");
+                    }
+                    else if (command.StartsWith("getconfig "))
+                    {
+                        string key = trimmedMessage.Substring("getconfig ".Length).Trim();
+                        string value = DeviceConfig.GetSanitizedValue(key);
+                        this.Publish(MqttConstants.SystemTopic + "/config", value == null ? "Config key not found: " + key : key + "=" + value);
+                        LogHelper.LogInformation("Config value requested, published");
+                    }
+                    else if (command.StartsWith("setconfig "))
+                    {
+                        string assignment = trimmedMessage.Substring("setconfig ".Length).Trim();
+                        bool updated = DeviceConfig.TrySet(assignment, out string result);
+                        this.Publish(MqttConstants.SystemTopic + "/config", result);
+                        LogHelper.LogInformation(updated ? "Config updated via MQTT" : "Config update via MQTT failed");
+                    }
+                    else if (command == "reloadconfig")
+                    {
+                        DeviceConfig.Reload();
+                        this.Publish(MqttConstants.SystemTopic + "/config", "Config reloaded");
+                        LogHelper.LogInformation("Config reloaded via MQTT");
+                    }
+                    else if (command == "reconnectmqtt")
+                    {
+                        this.Publish(MqttConstants.SystemTopic + "/reconnect", "MQTT reconnect requested");
+                        LogHelper.LogInformation("MQTT reconnect requested via MQTT command");
+
+                        lock (MqttConstants.ClientSyncRoot)
+                        {
+                            if (_mqttClient != null && _mqttClient.IsConnected)
+                            {
+                                _mqttClient.Disconnect();
+                            }
+                        }
+                    }
+                    else if (command == "reconnectwifi")
+                    {
+                        _connectionService.CheckConnection();
+
+                        string wifiResult = _connectionService.IsConnected
+                            ? "WiFi connected: " + _connectionService.GetIpAddress()
+                            : "WiFi reconnect requested, still disconnected";
+
+                        this.Publish(MqttConstants.SystemTopic + "/wifi", wifiResult);
+                        LogHelper.LogInformation("WiFi reconnect requested via MQTT command");
+                    }
                     else if (command == "clearlogs")
                     {
                         LogService.ClearLogs();
@@ -150,12 +208,20 @@
 
         private void Publish(string topic, string payload)
         {
-            if (_mqttClient == null || !_mqttClient.IsConnected || string.IsNullOrEmpty(topic) || payload == null)
+            if (string.IsNullOrEmpty(topic) || payload == null)
             {
                 return;
             }
 
-            _mqttClient.Publish(topic, Encoding.UTF8.GetBytes(payload));
+            lock (MqttConstants.ClientSyncRoot)
+            {
+                if (_mqttClient == null || !_mqttClient.IsConnected)
+                {
+                    return;
+                }
+
+                _mqttClient.Publish(topic, Encoding.UTF8.GetBytes(payload));
+            }
         }
 
         private static string NormalizeMessage(string message)

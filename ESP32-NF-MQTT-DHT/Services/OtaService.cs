@@ -42,15 +42,17 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             try
             {
-                if (_mqttClient != null && _mqttClient.IsConnected)
+                lock (Helpers.MqttConstants.ClientSyncRoot)
                 {
-                    var json = OtaUtil.StatusJson(state, msg);
-                    _mqttClient.Publish(ESP32_NF_MQTT_DHT.OTA.Config.TopicStatus, System.Text.Encoding.UTF8.GetBytes(json));
+                    if (_mqttClient != null && _mqttClient.IsConnected)
+                    {
+                        var json = OtaUtil.StatusJson(state, msg);
+                        _mqttClient.Publish(ESP32_NF_MQTT_DHT.OTA.Config.TopicStatus, System.Text.Encoding.UTF8.GetBytes(json));
+                        return;
+                    }
                 }
-                else
-                {
-                    OtaUtil.SafeStatus(state, msg);
-                }
+
+                OtaUtil.SafeStatus(state, msg);
             }
             catch
             {

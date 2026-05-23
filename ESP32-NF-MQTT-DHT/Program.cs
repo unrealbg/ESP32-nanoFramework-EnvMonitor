@@ -30,19 +30,28 @@ namespace ESP32_NF_MQTT_DHT
 #endif
             CredentialCache.Load();
             DeviceConfig.Load();
+            RuntimeStateTracker.Initialize();
+            RuntimeStateTracker.StartWatchdog();
+            RuntimeStateTracker.MarkProgress("program:config-loaded");
 
             try
             {
                 // Select sensor type from device config to avoid firmware rebuilds.
+                RuntimeStateTracker.MarkProgress("program:select-sensor-type");
                 SensorType sensorType = GetConfiguredSensorType();
 
+                RuntimeStateTracker.MarkProgress("program:configure-services");
                 var services = ConfigureServices(sensorType);
+                RuntimeStateTracker.MarkProgress("program:resolve-startup");
                 var application = services.GetService(typeof(Startup)) as Startup;
 
+                RuntimeStateTracker.MarkProgress("program:startup-run");
                 application?.Run();
+                RuntimeStateTracker.MarkProgress("program:startup-complete");
             }
             catch (Exception ex)
             {
+                RuntimeStateTracker.MarkProgress("program:main-exception");
                 LogHelper.LogError("An error occurred: " + ex.Message);
                 LogService.LogCritical("Critical error in Main", ex);
             }

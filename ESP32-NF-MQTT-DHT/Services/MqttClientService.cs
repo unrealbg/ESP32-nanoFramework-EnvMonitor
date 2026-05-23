@@ -25,7 +25,7 @@
     internal class MqttClientService : IMqttClientService, IDisposable
     {
         private const int ConnectionThreadJoinTimeoutMs = 1000;
-        private const int DeepSleepWaitMs = 2000;
+        private const int InitialPostConnectPublishDelayMs = 5000;
         private const string WifiSource = "WiFi";
         private const string InternetSource = "Internet";
 
@@ -46,15 +46,18 @@
         private readonly object _randomLock = new object();
         private readonly object _heartbeatLock = new object();
         private readonly object _disconnectReasonLock = new object();
+        private readonly object _mqttHealthLock = new object();
 
         private bool _isRunning;
         private bool _isHeartbeatRunning;
         private bool _isDisposed;
+        private bool _mqttHealthFailed;
 
         private EventHandler _internetLostHandler;
         private EventHandler _internetRestoredHandler;
         private EventHandler _connectionLostHandler;
         private EventHandler _connectionRestoredHandler;
+        private EventHandler _publishFailedHandler;
 
         private Thread _workerThread;
 
@@ -81,11 +84,13 @@
             _internetRestoredHandler = (s, e) => this.OnConnectivityChanged(s, true, InternetSource);
             _connectionLostHandler = (s, e) => this.OnConnectivityChanged(s, false, WifiSource);
             _connectionRestoredHandler = (s, e) => this.OnConnectivityChanged(s, true, WifiSource);
+            _publishFailedHandler = (s, e) => this.OnPublishFailed();
 
             _internetConnectionService.InternetLost += _internetLostHandler;
             _internetConnectionService.InternetRestored += _internetRestoredHandler;
             _connectionService.ConnectionLost += _connectionLostHandler;
             _connectionService.ConnectionRestored += _connectionRestoredHandler;
+            _mqttPublishService.PublishFailed += _publishFailedHandler;
 
             this.SetIsRunning(true);
 
@@ -130,6 +135,24 @@
             }
 
             _wakeSignal.Set();
+        }
+
+        private bool IsWorkerRunning()
+        {
+            lock (_connectionLock)
+            {
+                return _workerThread != null && _workerThread.IsAlive;
+            }
+        }
+
+        private void WakeWorkerOrStart()
+        {
+            _wakeSignal.Set();
+
+            if (!this.IsWorkerRunning())
+            {
+                this.Start();
+            }
         }
 
         /// <summary>
@@ -184,6 +207,11 @@
                     _connectionService.ConnectionRestored -= _connectionRestoredHandler;
                 }
 
+                if (_mqttPublishService != null)
+                {
+                    _mqttPublishService.PublishFailed -= _publishFailedHandler;
+                }
+
                 if (MqttClient != null)
                 {
                     MqttClient.ConnectionClosed -= ConnectionClosed;
@@ -194,6 +222,7 @@
                 _internetRestoredHandler = null;
                 _connectionLostHandler = null;
                 _connectionRestoredHandler = null;
+                _publishFailedHandler = null;
             }
             catch (Exception ex)
             {
@@ -214,11 +243,13 @@
             int attemptCount = 0;
             int reconnectDelay = InitialReconnectDelayMs;
             DateTime nextSensorPublish = DateTime.UtcNow;
+            RuntimeStateTracker.MarkProgress("mqtt:loop-start");
 
             while (this.GetIsRunning())
             {
                 if (_circuitBreaker.IsOpen)
                 {
+                    RuntimeStateTracker.MarkProgress("mqtt:circuit-breaker-open");
                     LogHelper.LogWarning("Circuit breaker open. Waiting before retrying MQTT connection.");
                     if (this.WaitForWake(reconnectDelay))
                     {
@@ -228,7 +259,9 @@
                     continue;
                 }
 
+                RuntimeStateTracker.MarkProgress("mqtt:before-wifi-check");
                 bool wifiReady = this.EnsureWifiConnected();
+                RuntimeStateTracker.MarkProgress(wifiReady ? "mqtt:wifi-ready" : "mqtt:wifi-not-ready");
 
                 if (!wifiReady)
                 {
@@ -244,17 +277,20 @@
 
                 if (!this.IsMqttReady())
                 {
+                    RuntimeStateTracker.MarkProgress("mqtt:before-connect");
                     if (this.AttemptBrokerConnection())
                     {
+                        RuntimeStateTracker.MarkProgress("mqtt:connected");
                         LogHelper.LogInformation("Connected to MQTT broker.");
                         LogHelper.LogInformation($"MQTT reconnect diagnostics: last disconnect reason='{this.GetLastDisconnectReason()}', free memory={GC.Run(false)} bytes");
                         attemptCount = 0;
                         reconnectDelay = InitialReconnectDelayMs;
-                        nextSensorPublish = DateTime.UtcNow;
+                        nextSensorPublish = DateTime.UtcNow.AddMilliseconds(InitialPostConnectPublishDelayMs);
                         continue;
                     }
 
                     attemptCount++;
+                    RuntimeStateTracker.MarkProgress("mqtt:connect-failed");
                     LogHelper.LogWarning($"MQTT connection failed (attempt {attemptCount}/{MaxTotalAttempts}).");
 
                     if (attemptCount >= MaxTotalAttempts)
@@ -277,7 +313,9 @@
 
                 if (DateTime.UtcNow >= nextSensorPublish)
                 {
+                    RuntimeStateTracker.MarkProgress("mqtt:before-publish");
                     this.PublishSensorData();
+                    RuntimeStateTracker.MarkProgress("mqtt:after-publish");
                     nextSensorPublish = DateTime.UtcNow.AddMilliseconds(SensorDataIntervalMs);
                 }
 
@@ -318,16 +356,9 @@
         /// </summary>
         private void HandleMaxAttemptsReached()
         {
-            LogHelper.LogWarning("Entering deep sleep to conserve power");
-
+            RuntimeStateTracker.MarkProgress("mqtt:max-attempts-reached");
+            LogHelper.LogWarning("Maximum MQTT reconnect attempts reached. Keeping device awake and continuing with circuit-breaker backoff.");
             this.SafeDisconnect("Maximum reconnect attempts reached");
-
-            _stopSignal.WaitOne(DeepSleepWaitMs, false);
-
-            TimeSpan deepSleepDuration = new TimeSpan(0, DeepSleepMinutes, 0);
-
-            Sleep.EnableWakeupByTimer(deepSleepDuration);
-            Sleep.StartDeepSleep();
         }
 
         /// <summary>
@@ -336,14 +367,18 @@
         /// </summary>
         private bool AttemptBrokerConnection()
         {
-            this.SafeDisconnect();
+            RuntimeStateTracker.MarkProgress("mqtt:connect-disconnect-old-client");
+            this.SafeDisconnect("Preparing fresh MQTT connection");
 
             try
             {
+                RuntimeStateTracker.MarkProgress("mqtt:connect-call");
                 bool isConnected = _connectionManager.Connect(Broker, Port, UseTls, ClientId, ClientUsername, ClientPassword);
 
                 if (isConnected && this.MqttClient != null && this.MqttClient.IsConnected)
                 {
+                    RuntimeStateTracker.MarkProgress("mqtt:initialize-client");
+                    this.SetMqttHealthy(true);
                     this.InitializeMqttClient();
                     return true;
                 }
@@ -364,7 +399,8 @@
                 LogService.LogCritical($"MQTT connect error: {ex.Message}\n{ex}");
             }
 
-            this.SafeDisconnect();
+            RuntimeStateTracker.MarkProgress("mqtt:connect-cleanup");
+            this.SafeDisconnect("MQTT connect cleanup");
             return false;
         }
 
@@ -373,23 +409,29 @@
         /// </summary>
         private void InitializeMqttClient()
         {
+            RuntimeStateTracker.MarkProgress("mqtt:initialize-client-start");
             if (this.MqttClient == null)
             {
                 LogHelper.LogError("Cannot initialize null MQTT client");
                 return;
             }
 
-            this.MqttClient.ConnectionClosed -= this.ConnectionClosed;
-            this.MqttClient.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
+            lock (MqttConstants.ClientSyncRoot)
+            {
+                this.MqttClient.ConnectionClosed -= this.ConnectionClosed;
+                this.MqttClient.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
 
-            this.MqttClient.ConnectionClosed += this.ConnectionClosed;
-            this.MqttClient.Subscribe(
-                new[] { MqttConstants.RelayTopic, MqttConstants.SystemTopic, OTA.Config.TopicCmd },
-                new[] { MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce });
-            this.MqttClient.MqttMsgPublishReceived += _mqttMessageHandler.HandleIncomingMessage;
+                this.MqttClient.ConnectionClosed += this.ConnectionClosed;
+                this.MqttClient.Subscribe(
+                    new[] { MqttConstants.RelayTopic, MqttConstants.SystemTopic, OTA.Config.TopicCmd },
+                    new[] { MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce, MqttQoSLevel.AtLeastOnce });
+                this.MqttClient.MqttMsgPublishReceived += _mqttMessageHandler.HandleIncomingMessage;
+            }
 
             _mqttMessageHandler.SetMqttClient(this.MqttClient);
             _mqttPublishService.SetMqttClient(this.MqttClient);
+            this.SetMqttHealthy(true);
+            _mqttPublishService.PublishRuntimeDiagnostics();
 
             lock (_heartbeatLock)
             {
@@ -401,6 +443,7 @@
             }
 
             LogHelper.LogInformation("MQTT client setup complete");
+            RuntimeStateTracker.MarkProgress("mqtt:initialize-client-complete");
         }
 
         /// <summary>
@@ -421,8 +464,7 @@
                 if (isRestored)
                 {
                     LogHelper.LogInformation("WiFi restored.");
-                    _wakeSignal.Set();
-                    this.Start();
+                    this.WakeWorkerOrStart();
                 }
                 else
                 {
@@ -440,9 +482,8 @@
 
                     if (_connectionService.IsConnected)
                     {
-                        LogHelper.LogInformation("WiFi is now detected as connected, starting MQTT...");
-                        _wakeSignal.Set();
-                        this.Start();
+                        LogHelper.LogInformation("WiFi is now detected as connected, waking MQTT worker...");
+                        this.WakeWorkerOrStart();
                     }
                     else
                     {
@@ -454,9 +495,13 @@
 
                 if (isRestored)
                 {
+                    if (this.IsMqttReady())
+                    {
+                        return;
+                    }
+
                     LogHelper.LogInformation("Internet restored.");
-                    _wakeSignal.Set();
-                    this.Start();
+                    this.WakeWorkerOrStart();
                 }
                 else
                 {
@@ -478,7 +523,26 @@
 
             LogHelper.LogWarning("Lost connection to MQTT broker, attempting to reconnect...");
 
+            this.SetMqttHealthy(false);
             this.SafeDisconnect("MQTT broker closed connection");
+            _wakeSignal.Set();
+        }
+
+        private void OnPublishFailed()
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            if (this.GetMqttHealthFailed())
+            {
+                return;
+            }
+
+            LogHelper.LogWarning("MQTT publish health check failed. Scheduling reconnect.");
+            this.SetLastDisconnectReason("MQTT publish health check failed");
+            this.SetMqttHealthy(false);
             _wakeSignal.Set();
         }
 
@@ -509,7 +573,7 @@
             }
 
             var client = _connectionManager.MqttClient;
-            return client != null && client.IsConnected;
+            return !this.GetMqttHealthFailed() && client != null && client.IsConnected;
         }
 
         private int GetJitter()
@@ -552,6 +616,7 @@
             {
                 long memoryBeforePublish = GC.Run(false);
                 LogHelper.LogInformation($"Publish diagnostics: free memory before publish={memoryBeforePublish} bytes");
+                RuntimeStateTracker.MarkProgress("mqtt:publish-dispatch");
                 _mqttPublishService.PublishSensorData();
                 long memoryAfterPublish = GC.Run(false);
                 LogHelper.LogInformation($"Publish diagnostics: free memory after publish={memoryAfterPublish} bytes");
@@ -585,18 +650,24 @@
         {
             var client = _connectionManager.MqttClient;
             this.SetLastDisconnectReason(reason);
-
-            LogHelper.LogWarning($"MQTT disconnect diagnostics: reason='{reason}', free memory={GC.Run(false)} bytes");
+            this.SetMqttHealthy(false);
 
             if (client == null)
             {
                 return;
             }
 
+            RuntimeStateTracker.MarkProgress("mqtt:disconnect|" + reason);
+
+            LogHelper.LogWarning($"MQTT disconnect diagnostics: reason='{reason}', free memory={GC.Run(false)} bytes");
+
             try
             {
-                client.ConnectionClosed -= this.ConnectionClosed;
-                client.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
+                lock (MqttConstants.ClientSyncRoot)
+                {
+                    client.ConnectionClosed -= this.ConnectionClosed;
+                    client.MqttMsgPublishReceived -= _mqttMessageHandler.HandleIncomingMessage;
+                }
             }
             catch (Exception ex)
             {
@@ -612,6 +683,22 @@
 
                 _mqttPublishService.StopHeartbeat();
                 _connectionManager.Disconnect();
+            }
+        }
+
+        private bool GetMqttHealthFailed()
+        {
+            lock (_mqttHealthLock)
+            {
+                return _mqttHealthFailed;
+            }
+        }
+
+        private void SetMqttHealthy(bool isHealthy)
+        {
+            lock (_mqttHealthLock)
+            {
+                _mqttHealthFailed = !isHealthy;
             }
         }
 

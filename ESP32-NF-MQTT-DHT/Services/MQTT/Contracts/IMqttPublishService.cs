@@ -1,5 +1,7 @@
 ﻿namespace ESP32_NF_MQTT_DHT.Services.MQTT.Contracts
 {
+    using System;
+
     using nanoFramework.M2Mqtt;
 
     /// <summary>
@@ -7,6 +9,11 @@
     /// </summary>
     public interface IMqttPublishService
     {
+        /// <summary>
+        /// Raised when a publish attempt indicates that the MQTT connection is unhealthy.
+        /// </summary>
+        event EventHandler PublishFailed;
+
         /// <summary>
         /// Publishes sensor data to the MQTT broker.
         /// </summary>
@@ -17,6 +24,11 @@
         /// </summary>
         /// <param name="errorMessage">The error message to be published.</param>
         void PublishError(string errorMessage);
+
+        /// <summary>
+        /// Publishes boot and runtime diagnostics after an MQTT connection is initialized.
+        /// </summary>
+        void PublishRuntimeDiagnostics();
 
         /// <summary>
         /// Sets the MQTT client to be used for publishing messages.

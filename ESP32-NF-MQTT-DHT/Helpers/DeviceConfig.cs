@@ -60,6 +60,17 @@ namespace ESP32_NF_MQTT_DHT.Helpers
             }
         }
 
+        public static void Reload()
+        {
+            lock (SyncLock)
+            {
+                Values.Clear();
+                _loaded = false;
+            }
+
+            Load();
+        }
+
         public static string GetString(string key, string defaultValue = "")
         {
             if (string.IsNullOrEmpty(key))
@@ -115,6 +126,140 @@ namespace ESP32_NF_MQTT_DHT.Helpers
             }
 
             return defaultValue;
+        }
+
+        public static string GetSanitizedContent()
+        {
+            lock (SyncLock)
+            {
+                EnsureLoaded();
+
+                if (Values.Count == 0)
+                {
+                    return "No config values found.";
+                }
+
+                var sb = new StringBuilder();
+                IDictionaryEnumerator entries = (IDictionaryEnumerator)Values.GetEnumerator();
+                while (entries.MoveNext())
+                {
+                    string key = (string)entries.Key;
+                    string value = (string)entries.Value;
+
+                    sb.Append(key);
+                    sb.Append('=');
+                    sb.Append(MaskValue(key, value));
+                    sb.Append('\n');
+                }
+
+                return sb.ToString();
+            }
+        }
+
+        public static string GetSanitizedValue(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                return null;
+            }
+
+            lock (SyncLock)
+            {
+                EnsureLoaded();
+
+                if (!Values.Contains(key))
+                {
+                    return null;
+                }
+
+                return MaskValue(key, (string)Values[key]);
+            }
+        }
+
+        public static bool TrySet(string assignment, out string resultMessage)
+        {
+            resultMessage = "Invalid config assignment.";
+
+            if (string.IsNullOrEmpty(assignment))
+            {
+                return false;
+            }
+
+            int eq = assignment.IndexOf('=');
+            if (eq <= 0)
+            {
+                return false;
+            }
+
+            string key = assignment.Substring(0, eq).Trim();
+            string value = (eq + 1 < assignment.Length) ? assignment.Substring(eq + 1).Trim() : string.Empty;
+            if (key.Length == 0)
+            {
+                return false;
+            }
+
+            lock (SyncLock)
+            {
+                EnsureLoaded();
+                Values[key] = value;
+
+                try
+                {
+                    PersistValues();
+                    resultMessage = "Config updated: " + key + "=" + MaskValue(key, value);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    resultMessage = "Failed to save config: " + ex.Message;
+                    Debug.WriteLine(resultMessage);
+                    return false;
+                }
+            }
+        }
+
+        private static void EnsureLoaded()
+        {
+            if (_loaded)
+            {
+                return;
+            }
+
+            Load();
+        }
+
+        private static void PersistValues()
+        {
+            var sb = new StringBuilder();
+            IDictionaryEnumerator entries = (IDictionaryEnumerator)Values.GetEnumerator();
+            while (entries.MoveNext())
+            {
+                sb.Append((string)entries.Key);
+                sb.Append('=');
+                sb.Append((string)entries.Value);
+                sb.Append('\n');
+            }
+
+            File.WriteAllText(ConfigPath, sb.ToString());
+        }
+
+        private static string MaskValue(string key, string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            string normalizedKey = key == null ? string.Empty : key.ToLower();
+            if (normalizedKey.IndexOf("password") >= 0 ||
+                normalizedKey.IndexOf("pass") >= 0 ||
+                normalizedKey.IndexOf("secret") >= 0 ||
+                normalizedKey.IndexOf("token") >= 0)
+            {
+                return "***";
+            }
+
+            return value;
         }
 
         private static void ParseContent(string content)
