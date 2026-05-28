@@ -31,6 +31,9 @@ namespace ESP32_NF_MQTT_DHT.Configuration
             // IRC bot keeps one additional worker thread plus a persistent outbound socket.
             public const long IrcBotRequiredMemory = 32000;
 
+            // Health probe keeps one small TCP listener thread and returns a single diagnostic line.
+            public const long HealthProbeRequiredMemory = 28000;
+
             public const string SupportedWebServerPlatform = "ESP32_S3";
 
             public static readonly string[] AlternativePlatformNames = new string[]
@@ -50,8 +53,11 @@ namespace ESP32_NF_MQTT_DHT.Configuration
         {
             public const int DefaultHttpPort = 80;
             public const int DefaultTcpPort = 8080;
+            public const int DefaultHealthProbePort = 31338;
             public const int ConnectionTimeoutMs = 30000;
             public const int MaxRetryAttempts = 3;
+
+            public static int HealthProbePort => DeviceConfig.GetInt32("health.port", DefaultHealthProbePort);
         }
 
         /// <summary>
@@ -107,6 +113,11 @@ namespace ESP32_NF_MQTT_DHT.Configuration
             public static bool EnableWebServer => DeviceConfig.GetBoolean("feature.web.enabled", false);
 
             /// <summary>
+            /// Enables the lightweight non-MQTT TCP health probe.
+            /// </summary>
+            public static bool EnableHealthProbe => DeviceConfig.GetBoolean("feature.healthProbe.enabled", true);
+
+            /// <summary>
             /// Enables verbose runtime memory monitor (DEBUG builds only).
             /// </summary>
             public static bool EnableMemoryMonitor => DeviceConfig.GetBoolean("feature.memoryMonitor.enabled", false);
@@ -126,6 +137,12 @@ namespace ESP32_NF_MQTT_DHT.Configuration
             /// Disabled by default to keep boot time, RAM use, and reflection overhead low.
             /// </summary>
             public static bool EnableDynamicModuleLoading => DeviceConfig.GetBoolean("feature.modules.enabled", false);
+
+            /// <summary>
+            /// Reboots the device when the diagnostic watchdog detects stalled runtime progress.
+            /// Disabled by default because investigation builds should preserve the hung state.
+            /// </summary>
+            public static bool EnableWatchdogReboot => DeviceConfig.GetBoolean("feature.watchdog.reboot.enabled", false);
         }
     }
 }

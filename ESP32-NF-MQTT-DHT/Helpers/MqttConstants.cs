@@ -21,6 +21,6 @@
 
         public const string OnlineStatusPayload = "online";
         public const string OfflineStatusPayload = "offline";
-        public const MqttQoSLevel StatusQoS = MqttQoSLevel.AtLeastOnce;
+        public const MqttQoSLevel StatusQoS = MqttQoSLevel.AtMostOnce;
     }
 }

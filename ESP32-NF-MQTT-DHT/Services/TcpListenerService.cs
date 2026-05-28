@@ -65,6 +65,7 @@
             _commandDescriptions.Add("humidity", "Displays the current humidity.");
             _commandDescriptions.Add("publishtemp", "Publishes the temperature via MQTT.");
             _commandDescriptions.Add("status", "Displays device status (temperature, humidity, uptime).");
+            _commandDescriptions.Add("health", "Displays a non-MQTT health snapshot.");
             _commandDescriptions.Add("publishuptime", "Publishes the device uptime via MQTT.");
             _commandDescriptions.Add("getipaddress", "Displays the device's IP address.");
             _commandDescriptions.Add("help", "Lists available commands.");
@@ -90,6 +91,8 @@
         /// </summary>
         public void Start()
         {
+            Thread listenerThread;
+
             if (_disposed)
             {
                 throw new ObjectDisposedException(nameof(TcpListenerService));
@@ -97,16 +100,17 @@
 
             lock (_lock)
             {
-                if (_isRunning)
+                if (_isRunning || (_listenerThread != null && _listenerThread.IsAlive))
                 {
                     LogHelper.LogInformation("TCP Listener already running");
                     return;
                 }
                 _isRunning = true;
+                _listenerThread = new Thread(this.StartTcpListening);
+                listenerThread = _listenerThread;
             }
 
-            _listenerThread = new Thread(this.StartTcpListening);
-            _listenerThread.Start();
+            listenerThread.Start();
 
             LogHelper.LogInformation("TCP listener started");
         }
@@ -116,9 +120,12 @@
         /// </summary>
         public void Stop()
         {
+            Thread listenerThread;
+
             lock (_lock)
             {
                 _isRunning = false;
+                listenerThread = _listenerThread;
             }
 
             if (_listener != null)
@@ -133,9 +140,17 @@
                 }
             }
 
-            if (_listenerThread != null)
+            if (listenerThread != null && Thread.CurrentThread != listenerThread)
             {
-                _listenerThread.Join(5000);
+                listenerThread.Join(5000);
+            }
+
+            lock (_lock)
+            {
+                if (_listenerThread == listenerThread && (listenerThread == null || !listenerThread.IsAlive))
+                {
+                    _listenerThread = null;
+                }
             }
 
             LogHelper.LogInformation("TCP listener stopped");
@@ -159,6 +174,9 @@
         /// </summary>
         private void StartTcpListening()
         {
+            Thread currentThread = Thread.CurrentThread;
+            TcpListener listener = null;
+
             try
             {
                 int retryCount = 0;
@@ -176,17 +194,18 @@
                     return;
                 }
 
-                _listener = new TcpListener(IPAddress.Any, TcpPort);
-                _listener.Server.ReceiveTimeout = Timeout;
-                _listener.Server.SendTimeout = Timeout;
-                _listener.Start(2);
+                listener = new TcpListener(IPAddress.Any, TcpPort);
+                _listener = listener;
+                listener.Server.ReceiveTimeout = Timeout;
+                listener.Server.SendTimeout = Timeout;
+                listener.Start(2);
 
                 while (_isRunning)
                 {
                     LogHelper.LogInformation("Waiting for an incoming connection on " + GetCurrentIpAddress() + " port " + TcpPort);
                     try
                     {
-                        TcpClient client = _listener.AcceptTcpClient();
+                        TcpClient client = listener.AcceptTcpClient();
                         IPEndPoint remoteIpEndPoint = client.Client.RemoteEndPoint as IPEndPoint;
                         string clientIp = remoteIpEndPoint != null ? remoteIpEndPoint.Address.ToString() : "Unknown";
                         LogHelper.LogInformation("Client connected on port " + TcpPort + " from " + clientIp);
@@ -262,6 +281,33 @@
             {
                 LogHelper.LogError("Fatal error in TCP listener: " + initEx.Message);
                 LogService.LogCritical("Fatal error in TCP listener: " + initEx.Message);
+            }
+            finally
+            {
+                if (listener != null)
+                {
+                    try
+                    {
+                        listener.Stop();
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                lock (_lock)
+                {
+                    if (_listenerThread == currentThread)
+                    {
+                        _isRunning = false;
+                        _listenerThread = null;
+                    }
+
+                    if (_listener == listener)
+                    {
+                        _listener = null;
+                    }
+                }
             }
         }
 
@@ -364,6 +410,11 @@
             commands.Add("status", new CommandHandler((args, writer) =>
             {
                 this.WriteToStream(writer, "Temp: " + _sensorService.GetTemp() + " C, Humidity: " + _sensorService.GetHumidity() + " %, Uptime: " + _uptimeService.GetUptime());
+                return false;
+            }));
+            commands.Add("health", new CommandHandler((args, writer) =>
+            {
+                this.WriteToStream(writer, HealthSnapshot.BuildLine(_uptimeService, _connectionService, _mqttClient));
                 return false;
             }));
             commands.Add("publishuptime", new CommandHandler((args, writer) =>
@@ -869,6 +920,7 @@
                 " - humidity        : Displays the current humidity.\r\n" +
                 " - publishTemp     : Publishes the temperature via MQTT.\r\n" +
                 " - status          : Displays device status (temperature, humidity, uptime).\r\n" +
+                " - health          : Displays runtime/MQTT health snapshot.\r\n" +
                 " - publishUptime   : Publishes the device uptime via MQTT.\r\n" +
                 " - getIpAddress    : Displays the device's IP address.\r\n" +
                 " - help            : Lists available commands.\r\n" +

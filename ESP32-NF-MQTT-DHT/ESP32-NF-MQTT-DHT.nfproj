@@ -35,6 +35,7 @@
     <Compile Include="ExtensionAttribute.cs" />
     <Compile Include="Helpers\CredentialCache.cs" />
     <Compile Include="Helpers\DeviceConfig.cs" />
+    <Compile Include="Helpers\HealthSnapshot.cs" />
     <Compile Include="Helpers\RuntimeStateTracker.cs" />
     <Compile Include="Modules\Contracts\IModule.cs" />
     <Compile Include="Modules\Contracts\IModuleManager.cs" />
@@ -72,7 +73,9 @@
     <Compile Include="Extensions\ServiceCollectionExtensions.cs" />
     <Compile Include="Services\Contracts\IInternetConnectionService.cs" />
     <Compile Include="Services\Contracts\IIrcBotService.cs" />
+    <Compile Include="Services\Contracts\IHealthProbeService.cs" />
     <Compile Include="Services\Contracts\ISensorService.cs" />
+    <Compile Include="Services\HealthProbeService.cs" />
     <Compile Include="Services\InternetConnectionService.cs" />
     <Compile Include="Services\IrcBotService.cs" />
     <Compile Include="Services\MQTT\Contracts\IMqttPublishService.cs" />
@@ -107,6 +110,7 @@
     <Compile Include="Services\MqttClientService.cs" />
     <Compile Include="Services\OtaService.cs" />
     <Compile Include="Services\NoOp\NoOpMqttClientService.cs" />
+    <Compile Include="Services\NoOp\NoOpHealthProbeService.cs" />
     <Compile Include="Services\NoOp\NoOpOtaService.cs" />
     <Compile Include="Services\NoOp\NoOpIrcBotService.cs" />
     <Compile Include="Services\NoOp\NoOpTcpListenerService.cs" />

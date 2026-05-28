@@ -18,7 +18,6 @@ namespace ESP32_NF_MQTT_DHT.Helpers
         private const string MqttStatePrefix = "mqtt:";
         private const int WatchdogCheckIntervalMs = 60000;
         private const int WatchdogTimeoutMs = 600000;
-        private const int MinPersistIntervalMs = 2000;
 
         private static readonly object _syncLock = new object();
 
@@ -30,7 +29,11 @@ namespace ESP32_NF_MQTT_DHT.Helpers
         private static DateTime _lastPersistedUtc = DateTime.MinValue;
         private static string _lastMqttState = "mqtt:not-started";
         private static DateTime _lastMqttProgressUtc = DateTime.MinValue;
+        private static string _lastMqttPublishState = "mqtt-publish:not-started";
+        private static DateTime _lastMqttPublishSuccessUtc = DateTime.MinValue;
         private static string _previousState;
+        private static string _lastWatchdogState = "watchdog:ok";
+        private static string _lastWatchdogReportKey;
 
         /// <summary>
         /// Initializes the tracker and reports the previous persisted state, if available.
@@ -91,7 +94,6 @@ namespace ESP32_NF_MQTT_DHT.Helpers
                 state = "unknown";
             }
 
-            string snapshot = null;
             lock (_syncLock)
             {
                 _lastState = state;
@@ -101,18 +103,6 @@ namespace ESP32_NF_MQTT_DHT.Helpers
                 {
                     _lastMqttState = state;
                     _lastMqttProgressUtc = _lastProgressUtc;
-                }
-
-                bool stateChanged = _lastPersistedState != state;
-                bool persistIntervalElapsed = _lastPersistedUtc == DateTime.MinValue ||
-                                              (_lastProgressUtc - _lastPersistedUtc).TotalMilliseconds >= MinPersistIntervalMs;
-
-                if (stateChanged || persistIntervalElapsed)
-                {
-                    snapshot = BuildSnapshot(_lastProgressUtc, _lastState);
-                    TryWriteState(snapshot);
-                    _lastPersistedState = state;
-                    _lastPersistedUtc = _lastProgressUtc;
                 }
             }
         }
@@ -125,15 +115,6 @@ namespace ESP32_NF_MQTT_DHT.Helpers
         {
             lock (_syncLock)
             {
-                if (_lastPersistedUtc != DateTime.MinValue)
-                {
-                    string persisted = TryReadLastState();
-                    if (!string.IsNullOrEmpty(persisted))
-                    {
-                        return persisted;
-                    }
-                }
-
                 if (_lastProgressUtc == DateTime.MinValue)
                 {
                     return "No runtime state available.";
@@ -156,6 +137,61 @@ namespace ESP32_NF_MQTT_DHT.Helpers
             }
         }
 
+        /// <summary>
+        /// Tracks a successful MQTT publish separately from general MQTT worker progress.
+        /// </summary>
+        public static void MarkMqttPublishSuccess(string context)
+        {
+            if (string.IsNullOrEmpty(context))
+            {
+                context = "unknown";
+            }
+
+            lock (_syncLock)
+            {
+                _lastMqttPublishState = "mqtt-publish:success|" + context;
+                _lastMqttPublishSuccessUtc = DateTime.UtcNow;
+                _lastWatchdogState = "watchdog:ok";
+                _lastWatchdogReportKey = null;
+            }
+        }
+
+        /// <summary>
+        /// Tracks a failed MQTT publish without refreshing the publish watchdog timestamp.
+        /// </summary>
+        public static void MarkMqttPublishFailure(string context)
+        {
+            if (string.IsNullOrEmpty(context))
+            {
+                context = "unknown";
+            }
+
+            lock (_syncLock)
+            {
+                _lastMqttPublishState = "mqtt-publish:failure|" + context + " at " + DateTime.UtcNow.ToString("u");
+            }
+        }
+
+        public static string GetMqttPublishState()
+        {
+            lock (_syncLock)
+            {
+                string lastSuccess = _lastMqttPublishSuccessUtc == DateTime.MinValue
+                    ? "never"
+                    : _lastMqttPublishSuccessUtc.ToString("u");
+
+                return _lastMqttPublishState + "; lastSuccess=" + lastSuccess;
+            }
+        }
+
+        public static string GetWatchdogState()
+        {
+            lock (_syncLock)
+            {
+                return _lastWatchdogState;
+            }
+        }
+
         private static void WatchdogLoop()
         {
             while (true)
@@ -166,6 +202,8 @@ namespace ESP32_NF_MQTT_DHT.Helpers
                 DateTime lastProgressUtc;
                 string lastMqttState;
                 DateTime lastMqttProgressUtc;
+                string lastMqttPublishState;
+                DateTime lastMqttPublishSuccessUtc;
 
                 lock (_syncLock)
                 {
@@ -173,10 +211,19 @@ namespace ESP32_NF_MQTT_DHT.Helpers
                     lastProgressUtc = _lastProgressUtc;
                     lastMqttState = _lastMqttState;
                     lastMqttProgressUtc = _lastMqttProgressUtc;
+                    lastMqttPublishState = _lastMqttPublishState;
+                    lastMqttPublishSuccessUtc = _lastMqttPublishSuccessUtc;
                 }
 
                 if (lastProgressUtc == DateTime.MinValue)
                 {
+                    continue;
+                }
+
+                if (IsMqttPublishWatchdogExpired(lastMqttPublishSuccessUtc))
+                {
+                    ReportWatchdogTimeout("mqtt-publish-stale|" + lastMqttPublishState,
+                        "Watchdog timeout. MQTT publish stalled. Last publish state: '" + lastMqttPublishState + "'");
                     continue;
                 }
 
@@ -187,30 +234,44 @@ namespace ESP32_NF_MQTT_DHT.Helpers
                         continue;
                     }
 
-                    string mqttMessage = "Watchdog timeout. MQTT progress stalled. Last MQTT state: '" + lastMqttState + "' at " + lastMqttProgressUtc.ToString("u");
-                    lock (_syncLock)
-                    {
-                        string mqttSnapshot = BuildSnapshot(DateTime.UtcNow, "watchdog-timeout|mqtt-stale|" + lastMqttState);
-                        TryWriteState(mqttSnapshot);
-                        _lastPersistedState = "watchdog-timeout|mqtt-stale|" + lastMqttState;
-                        _lastPersistedUtc = DateTime.UtcNow;
-                    }
-
-                    LogService.LogCritical(mqttMessage);
-                    Thread.Sleep(1000);
-                    Power.RebootDevice();
-                    return;
+                    ReportWatchdogTimeout("mqtt-stale|" + lastMqttState,
+                        "Watchdog timeout. MQTT progress stalled. Last MQTT state: '" + lastMqttState + "' at " + lastMqttProgressUtc.ToString("u"));
+                    continue;
                 }
 
-                string message = "Watchdog timeout. Last runtime state: '" + lastState + "' at " + lastProgressUtc.ToString("u");
-                lock (_syncLock)
+                ReportWatchdogTimeout("runtime-stale|" + lastState,
+                    "Watchdog timeout. Last runtime state: '" + lastState + "' at " + lastProgressUtc.ToString("u"));
+            }
+        }
+
+        private static void ReportWatchdogTimeout(string reportKey, string message)
+        {
+            bool shouldReport = false;
+            string snapshot = BuildSnapshot(DateTime.UtcNow, "watchdog-timeout|" + reportKey);
+
+            lock (_syncLock)
+            {
+                _lastWatchdogState = snapshot;
+
+                if (_lastWatchdogReportKey != reportKey)
                 {
-                    string snapshot = BuildSnapshot(DateTime.UtcNow, "watchdog-timeout|" + lastState);
-                    TryWriteState(snapshot);
-                    _lastPersistedState = "watchdog-timeout|" + lastState;
+                    _lastWatchdogReportKey = reportKey;
+                    _lastPersistedState = "watchdog-timeout|" + reportKey;
                     _lastPersistedUtc = DateTime.UtcNow;
+                    shouldReport = true;
                 }
-                LogService.LogCritical(message);
+            }
+
+            if (!shouldReport)
+            {
+                return;
+            }
+
+            TryWriteState(snapshot);
+            LogService.LogCritical(message);
+
+            if (AppConfiguration.Features.EnableWatchdogReboot)
+            {
                 Thread.Sleep(1000);
                 Power.RebootDevice();
             }
@@ -239,6 +300,21 @@ namespace ESP32_NF_MQTT_DHT.Helpers
             }
 
             return (DateTime.UtcNow - lastMqttProgressUtc).TotalMilliseconds >= WatchdogTimeoutMs;
+        }
+
+        private static bool IsMqttPublishWatchdogExpired(DateTime lastMqttPublishSuccessUtc)
+        {
+            if (!AppConfiguration.Features.EnableMqttClient)
+            {
+                return false;
+            }
+
+            if (lastMqttPublishSuccessUtc == DateTime.MinValue)
+            {
+                return false;
+            }
+
+            return (DateTime.UtcNow - lastMqttPublishSuccessUtc).TotalMilliseconds >= WatchdogTimeoutMs;
         }
 
         private static string TryReadLastState()
