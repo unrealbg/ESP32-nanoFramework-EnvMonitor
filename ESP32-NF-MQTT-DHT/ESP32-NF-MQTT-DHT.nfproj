@@ -35,6 +35,7 @@
     <Compile Include="ExtensionAttribute.cs" />
     <Compile Include="Helpers\CredentialCache.cs" />
     <Compile Include="Helpers\DeviceConfig.cs" />
+    <Compile Include="Helpers\HealthSnapshot.cs" />
     <Compile Include="Helpers\RuntimeStateTracker.cs" />
     <Compile Include="Modules\Contracts\IModule.cs" />
     <Compile Include="Modules\Contracts\IModuleManager.cs" />
@@ -72,7 +73,9 @@
     <Compile Include="Extensions\ServiceCollectionExtensions.cs" />
     <Compile Include="Services\Contracts\IInternetConnectionService.cs" />
     <Compile Include="Services\Contracts\IIrcBotService.cs" />
+    <Compile Include="Services\Contracts\IHealthProbeService.cs" />
     <Compile Include="Services\Contracts\ISensorService.cs" />
+    <Compile Include="Services\HealthProbeService.cs" />
     <Compile Include="Services\InternetConnectionService.cs" />
     <Compile Include="Services\IrcBotService.cs" />
     <Compile Include="Services\MQTT\Contracts\IMqttPublishService.cs" />
@@ -107,6 +110,7 @@
     <Compile Include="Services\MqttClientService.cs" />
     <Compile Include="Services\OtaService.cs" />
     <Compile Include="Services\NoOp\NoOpMqttClientService.cs" />
+    <Compile Include="Services\NoOp\NoOpHealthProbeService.cs" />
     <Compile Include="Services\NoOp\NoOpOtaService.cs" />
     <Compile Include="Services\NoOp\NoOpIrcBotService.cs" />
     <Compile Include="Services\NoOp\NoOpTcpListenerService.cs" />
@@ -120,19 +124,19 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Iot.Device.Ahtxx">
-      <HintPath>..\packages\nanoFramework.Iot.Device.Ahtxx.1.2.869\lib\Iot.Device.Ahtxx.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Iot.Device.Ahtxx.1.2.952\lib\Iot.Device.Ahtxx.dll</HintPath>
     </Reference>
     <Reference Include="Iot.Device.Bmxx80">
-      <HintPath>..\packages\nanoFramework.Iot.Device.Bmxx80.1.2.869\lib\Iot.Device.Bmxx80.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Iot.Device.Bmxx80.1.2.952\lib\Iot.Device.Bmxx80.dll</HintPath>
     </Reference>
     <Reference Include="Iot.Device.Common.WeatherHelper">
-      <HintPath>..\packages\nanoFramework.Iot.Device.Common.WeatherHelper.1.2.865\lib\Iot.Device.Common.WeatherHelper.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Iot.Device.Common.WeatherHelper.1.2.950\lib\Iot.Device.Common.WeatherHelper.dll</HintPath>
     </Reference>
     <Reference Include="Iot.Device.Dhtxx.Esp32">
-      <HintPath>..\packages\nanoFramework.Iot.Device.Dhtxx.Esp32.1.2.869\lib\Iot.Device.Dhtxx.Esp32.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Iot.Device.Dhtxx.Esp32.1.2.955\lib\Iot.Device.Dhtxx.Esp32.dll</HintPath>
     </Reference>
     <Reference Include="Iot.Device.Shtc3">
-      <HintPath>..\packages\nanoFramework.Iot.Device.Shtc3.1.2.869\lib\Iot.Device.Shtc3.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Iot.Device.Shtc3.1.2.952\lib\Iot.Device.Shtc3.dll</HintPath>
     </Reference>
     <Reference Include="Iot.Device.Ws28xx.Esp32">
       <HintPath>..\packages\nanoFramework.Iot.Device.Ws28xx.Esp32.1.2.852\lib\Iot.Device.Ws28xx.Esp32.dll</HintPath>
@@ -147,25 +151,22 @@
       <HintPath>..\packages\nanoFramework.Graphics.Core.1.2.42\lib\nanoFramework.Graphics.Core.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.Hardware.Esp32">
-      <HintPath>..\packages\nanoFramework.Hardware.Esp32.1.6.34\lib\nanoFramework.Hardware.Esp32.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Hardware.Esp32.1.6.37\lib\nanoFramework.Hardware.Esp32.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.Hardware.Esp32.Rmt">
       <HintPath>..\packages\nanoFramework.Hardware.Esp32.Rmt.2.0.35\lib\nanoFramework.Hardware.Esp32.Rmt.dll</HintPath>
     </Reference>
-    <Reference Include="nanoFramework.Iot.Device.Shtc3">
-      <HintPath>libs\Shtc3\Iot.Device.Shtc3.dll</HintPath>
-    </Reference>
     <Reference Include="nanoFramework.Json">
-      <HintPath>..\packages\nanoFramework.Json.2.2.199\lib\nanoFramework.Json.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Json.2.2.210\lib\nanoFramework.Json.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.Logging">
-      <HintPath>..\packages\nanoFramework.Logging.1.1.156\lib\nanoFramework.Logging.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.Logging.1.1.161\lib\nanoFramework.Logging.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.M2Mqtt">
-      <HintPath>..\packages\nanoFramework.M2Mqtt.5.1.199\lib\nanoFramework.M2Mqtt.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.M2Mqtt.5.1.212\lib\nanoFramework.M2Mqtt.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.M2Mqtt.Core">
-      <HintPath>..\packages\nanoFramework.M2Mqtt.5.1.199\lib\nanoFramework.M2Mqtt.Core.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.M2Mqtt.5.1.212\lib\nanoFramework.M2Mqtt.Core.dll</HintPath>
     </Reference>
     <Reference Include="nanoFramework.Networking.Sntp">
       <HintPath>..\packages\nanoFramework.Networking.Sntp.1.6.42\lib\nanoFramework.Networking.Sntp.dll</HintPath>
@@ -182,8 +183,26 @@
     <Reference Include="nanoFramework.System.Text">
       <HintPath>..\packages\nanoFramework.System.Text.1.3.42\lib\nanoFramework.System.Text.dll</HintPath>
     </Reference>
+    <Reference Include="nanoFramework.UnitsNet.Duration">
+      <HintPath>..\packages\nanoFramework.UnitsNet.Duration.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.Duration.dll</HintPath>
+    </Reference>
+    <Reference Include="nanoFramework.UnitsNet.ElectricResistance">
+      <HintPath>..\packages\nanoFramework.UnitsNet.ElectricResistance.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.ElectricResistance.dll</HintPath>
+    </Reference>
+    <Reference Include="nanoFramework.UnitsNet.Length">
+      <HintPath>..\packages\nanoFramework.UnitsNet.Length.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.Length.dll</HintPath>
+    </Reference>
+    <Reference Include="nanoFramework.UnitsNet.Pressure">
+      <HintPath>..\packages\nanoFramework.UnitsNet.Pressure.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.Pressure.dll</HintPath>
+    </Reference>
+    <Reference Include="nanoFramework.UnitsNet.RelativeHumidity">
+      <HintPath>..\packages\nanoFramework.UnitsNet.RelativeHumidity.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.RelativeHumidity.dll</HintPath>
+    </Reference>
+    <Reference Include="nanoFramework.UnitsNet.Temperature">
+      <HintPath>..\packages\nanoFramework.UnitsNet.Temperature.5.76.15\lib\netnano1.0\nanoFramework.UnitsNet.Temperature.dll</HintPath>
+    </Reference>
     <Reference Include="nanoFramework.WebServer">
-      <HintPath>..\packages\nanoFramework.WebServer.1.2.121\lib\nanoFramework.WebServer.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.WebServer.1.2.144\lib\nanoFramework.WebServer.dll</HintPath>
     </Reference>
     <Reference Include="System.Buffers.Binary.BinaryPrimitives">
       <HintPath>..\packages\nanoFramework.System.Buffers.Binary.BinaryPrimitives.1.2.862\lib\System.Buffers.Binary.BinaryPrimitives.dll</HintPath>
@@ -198,7 +217,7 @@
       <HintPath>..\packages\nanoFramework.System.Device.Model.1.2.862\lib\System.Device.Model.dll</HintPath>
     </Reference>
     <Reference Include="System.Device.Wifi">
-      <HintPath>..\packages\nanoFramework.System.Device.Wifi.1.5.133\lib\System.Device.Wifi.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.System.Device.Wifi.1.5.141\lib\System.Device.Wifi.dll</HintPath>
     </Reference>
     <Reference Include="System.Diagnostics.Stopwatch">
       <HintPath>..\packages\nanoFramework.System.Diagnostics.Stopwatch.1.2.862\lib\System.Diagnostics.Stopwatch.dll</HintPath>
@@ -213,34 +232,16 @@
       <HintPath>..\packages\nanoFramework.System.Math.1.5.116\lib\System.Math.dll</HintPath>
     </Reference>
     <Reference Include="System.Net">
-      <HintPath>..\packages\nanoFramework.System.Net.1.11.43\lib\System.Net.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.System.Net.1.11.50\lib\System.Net.dll</HintPath>
     </Reference>
     <Reference Include="System.Net.Http">
-      <HintPath>..\packages\nanoFramework.System.Net.Http.1.5.195\lib\System.Net.Http.dll</HintPath>
+      <HintPath>..\packages\nanoFramework.System.Net.Http.1.5.206\lib\System.Net.Http.dll</HintPath>
     </Reference>
     <Reference Include="System.Net.Sockets.TcpClient">
-      <HintPath>..\packages\nanoframework.System.Net.Sockets.TcpClient.1.1.122\lib\System.Net.Sockets.TcpClient.dll</HintPath>
+      <HintPath>..\packages\nanoframework.System.Net.Sockets.TcpClient.1.1.127\lib\System.Net.Sockets.TcpClient.dll</HintPath>
     </Reference>
     <Reference Include="System.Threading">
       <HintPath>..\packages\nanoFramework.System.Threading.1.1.52\lib\System.Threading.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.Duration">
-      <HintPath>..\packages\UnitsNet.nanoFramework.Duration.5.74.0\lib\UnitsNet.Duration.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.ElectricResistance">
-      <HintPath>..\packages\UnitsNet.nanoFramework.ElectricResistance.5.74.0\lib\UnitsNet.ElectricResistance.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.Length">
-      <HintPath>..\packages\UnitsNet.nanoFramework.Length.5.74.0\lib\UnitsNet.Length.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.Pressure">
-      <HintPath>..\packages\UnitsNet.nanoFramework.Pressure.5.74.0\lib\UnitsNet.Pressure.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.RelativeHumidity">
-      <HintPath>..\packages\UnitsNet.nanoFramework.RelativeHumidity.5.74.0\lib\UnitsNet.RelativeHumidity.dll</HintPath>
-    </Reference>
-    <Reference Include="UnitsNet.Temperature">
-      <HintPath>..\packages\UnitsNet.nanoFramework.Temperature.5.74.0\lib\UnitsNet.Temperature.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>

@@ -27,6 +27,8 @@
         {
             try
             {
+                this.Disconnect();
+
                 LogHelper.LogInformation($"Connecting to MQTT broker: {broker}:{port} (TLS: {useTls})...");
                 var sslProtocol = useTls ? MqttSslProtocols.TLSv1_2 : MqttSslProtocols.None;
 
@@ -74,6 +76,7 @@
                 LogService.LogCritical($"{LogMessages.ErrorConnectingToBroker} {ex.Message}");
             }
 
+            this.Disconnect();
             return false;
         }
 
@@ -82,28 +85,40 @@
         /// </summary>
         public void Disconnect()
         {
-            if (this.MqttClient != null)
+            MqttClient client;
+
+            lock (MqttConstants.ClientSyncRoot)
+            {
+                client = this.MqttClient;
+                this.MqttClient = null;
+            }
+
+            if (client != null)
             {
                 try
                 {
                     lock (MqttConstants.ClientSyncRoot)
                     {
-                        if (this.MqttClient.IsConnected)
+                        if (client.IsConnected)
                         {
-                            this.MqttClient.Disconnect();
+                            client.Disconnect();
                         }
-
-                        this.MqttClient.Dispose();
                     }
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.LogError($"Error while disconnecting MQTT client: {ex.Message}");
+                    LogService.LogCritical($"Error while disconnecting MQTT client: {ex.Message}", ex);
+                }
+
+                try
+                {
+                    client.Dispose();
                 }
                 catch (Exception ex)
                 {
                     LogHelper.LogError($"Error while disposing MQTT client: {ex.Message}");
                     LogService.LogCritical($"Error while disposing MQTT client: {ex.Message}", ex);
-                }
-                finally
-                {
-                    this.MqttClient = null;
                 }
             }
         }

@@ -614,12 +614,8 @@
 
             try
             {
-                long memoryBeforePublish = GC.Run(false);
-                LogHelper.LogInformation($"Publish diagnostics: free memory before publish={memoryBeforePublish} bytes");
                 RuntimeStateTracker.MarkProgress("mqtt:publish-dispatch");
                 _mqttPublishService.PublishSensorData();
-                long memoryAfterPublish = GC.Run(false);
-                LogHelper.LogInformation($"Publish diagnostics: free memory after publish={memoryAfterPublish} bytes");
             }
             catch (Exception ex)
             {
@@ -682,7 +678,29 @@
                 }
 
                 _mqttPublishService.StopHeartbeat();
+                this.ReleaseMqttClientReferences();
                 _connectionManager.Disconnect();
+            }
+        }
+
+        private void ReleaseMqttClientReferences()
+        {
+            try
+            {
+                _mqttPublishService.SetMqttClient(null);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error clearing MQTT publish client reference: " + ex.Message);
+            }
+
+            try
+            {
+                _mqttMessageHandler.SetMqttClient(null);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.LogError("Error clearing MQTT message client reference: " + ex.Message);
             }
         }
 

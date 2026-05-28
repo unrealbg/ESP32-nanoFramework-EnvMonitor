@@ -17,6 +17,7 @@ namespace ESP32_NF_MQTT_DHT.Services
         private readonly ISensorManager _sensorManager;
         private readonly IMqttClientService _mqttClient;
         private readonly IIrcBotService _ircBotService;
+        private readonly IHealthProbeService _healthProbeService;
         private readonly ITcpListenerService _tcpListenerService;
         private readonly IWebServerService _webServerService;
         private readonly IPlatformService _platformService;
@@ -25,6 +26,7 @@ namespace ESP32_NF_MQTT_DHT.Services
             ISensorManager sensorManager,
             IMqttClientService mqttClient,
             IIrcBotService ircBotService,
+            IHealthProbeService healthProbeService,
             ITcpListenerService tcpListenerService,
             IWebServerService webServerService,
             IPlatformService platformService)
@@ -32,6 +34,7 @@ namespace ESP32_NF_MQTT_DHT.Services
             _sensorManager = sensorManager;
             _mqttClient = mqttClient;
             _ircBotService = ircBotService;
+            _healthProbeService = healthProbeService;
             _tcpListenerService = tcpListenerService;
             _webServerService = webServerService;
             _platformService = platformService;
@@ -60,6 +63,15 @@ namespace ESP32_NF_MQTT_DHT.Services
             else
             {
                 LogHelper.LogInformation("WebServer disabled – skipping startup.");
+            }
+
+            if (AppConfiguration.Features.EnableHealthProbe)
+            {
+                this.StartService(Contracts.StartupService.HealthProbe);
+            }
+            else
+            {
+                LogHelper.LogInformation("Health probe disabled – skipping startup.");
             }
 
             if (AppConfiguration.Features.EnableMqttClient)
@@ -115,6 +127,9 @@ namespace ESP32_NF_MQTT_DHT.Services
                 case ESP32_NF_MQTT_DHT.Services.Contracts.StartupService.WebServer:
                     this.StartWebServerIfSupported();
                     break;
+                case ESP32_NF_MQTT_DHT.Services.Contracts.StartupService.HealthProbe:
+                    this.StartHealthProbe();
+                    break;
                 default:
                     LogHelper.LogWarning("Unknown service: " + service);
                     break;
@@ -163,6 +178,12 @@ namespace ESP32_NF_MQTT_DHT.Services
                 return;
             }
 
+            if (serviceName == "HealthProbe")
+            {
+                this.StartService(ESP32_NF_MQTT_DHT.Services.Contracts.StartupService.HealthProbe);
+                return;
+            }
+
             LogHelper.LogWarning("Unknown service: " + serviceName);
         }
 
@@ -172,6 +193,7 @@ namespace ESP32_NF_MQTT_DHT.Services
         public void StopAllServices()
         {
             LogHelper.LogInformation("Stopping all services...");
+            _healthProbeService.Stop();
             _ircBotService.Stop();
             _sensorManager.StopSensor();
         }
@@ -244,6 +266,28 @@ namespace ESP32_NF_MQTT_DHT.Services
             _tcpListenerService.Start();
             LogHelper.LogInformation("TCPListener service started.");
             LogStartupMemory("After TCPListener");
+        }
+
+        private void StartHealthProbe()
+        {
+            if (!AppConfiguration.Features.EnableHealthProbe)
+            {
+                return;
+            }
+
+            var required = AppConfiguration.Platform.HealthProbeRequiredMemory;
+            var available = GetStartupFreeMemory(required);
+            if (available < required)
+            {
+                LogHelper.LogWarning($"Skipping health probe startup due to low memory. Required: {required}, Available: {available}.");
+                return;
+            }
+
+            LogStartupMemory("Before HealthProbe");
+            LogHelper.LogInformation("Starting health probe service...");
+            _healthProbeService.Start();
+            LogHelper.LogInformation("Health probe service started.");
+            LogStartupMemory("After HealthProbe");
         }
 
         private void StartWebServerIfSupported()

@@ -34,6 +34,11 @@ namespace ESP32_NF_MQTT_DHT.Modules
             {
                 lock (_stateLock)
                 {
+                    if (_running && _periodicThread != null && _periodicThread.IsAlive)
+                    {
+                        return;
+                    }
+
                     _running = true;
                 }
 

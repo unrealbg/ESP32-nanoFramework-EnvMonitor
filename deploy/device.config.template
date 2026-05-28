@@ -11,9 +11,12 @@ feature.mqtt.enabled=true
 feature.irc.enabled=true
 feature.tcp.enabled=false
 feature.web.enabled=false
+feature.healthProbe.enabled=true
 feature.otaMqtt.enabled=true
 feature.memoryMonitor.enabled=true
 feature.startupMemoryTrace.enabled=true
+feature.watchdog.reboot.enabled=false
+health.port=31338
 
 # MQTT (optional)
 mqtt.broker=192.168.1.10

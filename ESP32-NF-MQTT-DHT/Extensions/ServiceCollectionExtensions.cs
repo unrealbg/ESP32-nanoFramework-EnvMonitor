@@ -40,6 +40,7 @@
             services.AddSingleton(typeof(IMqttConnectionManager), typeof(MqttConnectionManager));
             services.AddSingleton(typeof(IMqttPublishService), typeof(MqttPublishService));
             services.AddSingleton(typeof(IIrcBotService), AppConfiguration.Features.EnableIrcBot ? typeof(IrcBotService) : typeof(NoOpIrcBotService));
+            services.AddSingleton(typeof(IHealthProbeService), AppConfiguration.Features.EnableHealthProbe ? typeof(HealthProbeService) : typeof(NoOpHealthProbeService));
             services.AddSingleton(typeof(ITcpListenerService), AppConfiguration.Features.EnableTcpConsole ? typeof(TcpListenerService) : typeof(NoOpTcpListenerService));
             services.AddSingleton(typeof(IWebServerService), AppConfiguration.Features.EnableWebServer ? typeof(WebServerService) : typeof(NoOpWebServerService));
             services.AddSingleton(typeof(IOtaService), AppConfiguration.Features.EnableMqttClient && AppConfiguration.Features.EnableOtaOverMqtt ? typeof(OtaService) : typeof(NoOpOtaService));

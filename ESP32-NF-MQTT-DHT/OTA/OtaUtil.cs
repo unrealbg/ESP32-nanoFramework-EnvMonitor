@@ -7,23 +7,30 @@ namespace ESP32_NF_MQTT_DHT.OTA
 
     internal static class OtaUtil
     {
+        private static readonly object _statusClientLock = new object();
         private static MqttClient _statusClient;
 
         public static void EnsureStatusClient()
         {
-            if (_statusClient != null && _statusClient.IsConnected)
+            lock (_statusClientLock)
             {
-                return;
-            }
+                if (_statusClient != null && _statusClient.IsConnected)
+                {
+                    return;
+                }
 
-            try
-            {
-                _statusClient = new MqttClient(Config.BrokerHost, Config.BrokerPort, Config.BrokerTls, null, null, MqttSslProtocols.None);
-                _statusClient.Connect(Config.DeviceId + "-status", Config.BrokerUser, Config.BrokerPass);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[MQTT-STATUS] " + ex.Message);
+                DisposeStatusClient();
+
+                try
+                {
+                    _statusClient = new MqttClient(Config.BrokerHost, Config.BrokerPort, Config.BrokerTls, null, null, MqttSslProtocols.None);
+                    _statusClient.Connect(Config.DeviceId + "-status", Config.BrokerUser, Config.BrokerPass);
+                }
+                catch (Exception ex)
+                {
+                    DisposeStatusClient();
+                    Console.WriteLine("[MQTT-STATUS] " + ex.Message);
+                }
             }
         }
 
@@ -46,15 +53,47 @@ namespace ESP32_NF_MQTT_DHT.OTA
             try
             {
                 EnsureStatusClient();
-                if (_statusClient != null && _statusClient.IsConnected)
+                lock (_statusClientLock)
                 {
-                    _statusClient.Publish(Config.TopicStatus, Encoding.UTF8.GetBytes(json));
+                    if (_statusClient != null && _statusClient.IsConnected)
+                    {
+                        _statusClient.Publish(Config.TopicStatus, Encoding.UTF8.GetBytes(json));
+                    }
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine("[MQTT-STATUS] publish: " + ex.Message);
             }
+        }
+
+        private static void DisposeStatusClient()
+        {
+            if (_statusClient == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_statusClient.IsConnected)
+                {
+                    _statusClient.Disconnect();
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _statusClient.Dispose();
+            }
+            catch
+            {
+            }
+
+            _statusClient = null;
         }
 
         public static void SafeStatus(string state, string msg)

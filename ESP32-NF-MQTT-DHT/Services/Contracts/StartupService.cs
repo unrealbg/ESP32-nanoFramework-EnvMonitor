@@ -10,5 +10,6 @@ namespace ESP32_NF_MQTT_DHT.Services.Contracts
         IrcBot = 2,
         TcpListener = 3,
         WebServer = 4,
+        HealthProbe = 5,
     }
 }

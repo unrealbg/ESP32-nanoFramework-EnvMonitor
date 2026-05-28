@@ -48,6 +48,11 @@
         /// </summary>
         public override void Start()
         {
+            if (_running)
+            {
+                return;
+            }
+
             Configuration.SetPinFunction(DataPin, DeviceFunction.I2C1_DATA);
             Configuration.SetPinFunction(ClockPin, DeviceFunction.I2C1_CLOCK);
 

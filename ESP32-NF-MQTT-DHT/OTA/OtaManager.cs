@@ -535,6 +535,8 @@
         private static byte[] HttpGetBytes(string url)
         {
             HttpClient client = null;
+            HttpResponseMessage response = null;
+
             try
             {
                 client = new HttpClient();
@@ -554,30 +556,19 @@
                     // ignored
                 }
 
-                var resp = client.Get(url);
-                if (resp == null || resp.Content == null)
+                response = client.Get(url);
+                if (response == null || response.Content == null)
                 {
                     return null;
                 }
 
-                if ((int)resp.StatusCode != 200)
+                if ((int)response.StatusCode != 200)
                 {
-                    try
-                    {
-                        resp.Dispose();
-                    }
-                    catch
-                    {
-                        // ignored
-                    }
-
-                    Console.WriteLine("[HTTP] Non-OK status: " + (int)resp.StatusCode);
+                    Console.WriteLine("[HTTP] Non-OK status: " + (int)response.StatusCode);
                     return null;
                 }
 
-                var buf = resp.Content.ReadAsByteArray();
-                resp.Dispose();
-                return buf;
+                return response.Content.ReadAsByteArray();
             }
             catch (Exception ex)
             {
@@ -586,6 +577,17 @@
             }
             finally
             {
+                if (response != null)
+                {
+                    try
+                    {
+                        response.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                }
+
                 if (client != null)
                 {
                     client.Dispose();

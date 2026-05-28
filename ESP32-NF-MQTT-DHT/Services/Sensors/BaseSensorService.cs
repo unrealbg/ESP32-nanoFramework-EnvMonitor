@@ -19,6 +19,7 @@
         protected Timer _readTimer;
         protected int _consecutiveReadFailures;
         protected DateTime _lastSuccessfulReadUtc = DateTime.MinValue;
+        private readonly object _timerLock = new object();
 
         /// <summary>
         /// Retrieves the sensor data.
@@ -59,9 +60,17 @@
         /// </summary>
         public virtual void Start()
         {
-            _running = true;
-            RuntimeStateTracker.MarkProgress("sensor:start|" + this.GetSensorType());
-            _readTimer = new Timer(this.ReadCallback, null, 0, ReadIntervalMs);
+            lock (_timerLock)
+            {
+                if (_running)
+                {
+                    return;
+                }
+
+                _running = true;
+                RuntimeStateTracker.MarkProgress("sensor:start|" + this.GetSensorType());
+                _readTimer = new Timer(this.ReadCallback, null, 0, ReadIntervalMs);
+            }
         }
 
         /// <summary>
@@ -69,9 +78,22 @@
         /// </summary>
         public virtual void Stop()
         {
-            _running = false;
+            Timer readTimer = null;
+
+            lock (_timerLock)
+            {
+                if (!_running && _readTimer == null)
+                {
+                    return;
+                }
+
+                _running = false;
+                readTimer = _readTimer;
+                _readTimer = null;
+            }
+
             RuntimeStateTracker.MarkProgress("sensor:stop|" + this.GetSensorType());
-            _readTimer?.Dispose();
+            readTimer?.Dispose();
         }
 
         /// <summary>
@@ -126,7 +148,17 @@
                 RuntimeStateTracker.MarkProgress("sensor:read-exception|" + this.GetSensorType());
                 this.RegisterReadFailure(ex.Message);
 
-                _readTimer.Change(ErrorIntervalMs, ReadIntervalMs);
+                try
+                {
+                    Timer readTimer = _readTimer;
+                    if (readTimer != null)
+                    {
+                        readTimer.Change(ErrorIntervalMs, ReadIntervalMs);
+                    }
+                }
+                catch
+                {
+                }
             }
         }
 

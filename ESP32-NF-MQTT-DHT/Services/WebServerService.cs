@@ -111,6 +111,7 @@
                 {
                     LogHelper.LogError("Error starting web server: " + ex.Message);
                     LogService.LogCritical("Error starting web server: " + ex.Message, ex);
+                    this.DisposeServer();
                 }
             }
         }
@@ -122,9 +123,16 @@
         {
             if (_isServerRunning)
             {
-                _server.Stop();
-                _server.Dispose();
-                _server = null;
+                try
+                {
+                    _server?.Stop();
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.LogError("Error stopping web server: " + ex.Message);
+                }
+
+                this.DisposeServer();
                 _isServerRunning = false;
                 LogHelper.LogInformation("Web server stopped.");
             }
@@ -184,6 +192,24 @@
                 }, _serviceProvider);
                 LogHelper.LogInformation("Web server initialized with SensorController and AuthController.");
             }
+        }
+
+        private void DisposeServer()
+        {
+            if (_server == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _server.Dispose();
+            }
+            catch
+            {
+            }
+
+            _server = null;
         }
     }
 }

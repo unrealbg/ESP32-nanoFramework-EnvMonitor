@@ -22,8 +22,11 @@
     /// </summary>
     public class MqttPublishService : IMqttPublishService, IDisposable
     {
-        private const int HeartbeatInterval = 30000;
+        private const int HeartbeatInterval = 60000;
         private const int InitialHeartbeatDelayMs = 5000;
+        private const int DetailedStatusEveryHeartbeats = 5;
+        private const long MinimumFreeMemoryBeforePublish = 10000;
+        private const long MinimumFreeMemoryForDetailedStatus = 18000;
         private readonly ManualResetEvent _heartbeatStopSignal = new ManualResetEvent(false);
         private readonly object _heartbeatLock = new object();
         private readonly object _clientLock = new object();
@@ -42,6 +45,7 @@
         private bool _isHeartbeatRunning = false;
         private bool _disposed = false;
         private bool _publishFailureReported;
+        private int _heartbeatCount;
 
         public event EventHandler PublishFailed;
 
@@ -148,27 +152,35 @@
         /// </summary>
         public void StopHeartbeat()
         {
-            if (_disposed) return;
-            
+            Thread heartbeatThread = null;
+
             lock (_heartbeatLock)
             {
-                if (!_isHeartbeatRunning)
+                if (!_isHeartbeatRunning && (_heartbeatThread == null || !_heartbeatThread.IsAlive))
                 {
                     return;
                 }
                 
                 _isHeartbeatRunning = false;
                 _heartbeatStopSignal.Set();
-                
-                if (_heartbeatThread != null && _heartbeatThread.IsAlive)
+                heartbeatThread = _heartbeatThread;
+            }
+
+            if (heartbeatThread != null && heartbeatThread.IsAlive && Thread.CurrentThread != heartbeatThread)
+            {
+                if (!heartbeatThread.Join(5000))
                 {
-                    if (!_heartbeatThread.Join(5000))
-                    {
-                        LogHelper.LogWarning("Heartbeat thread did not terminate within timeout.");
-                    }
+                    LogHelper.LogWarning("Heartbeat thread did not terminate within timeout.");
                 }
-                
-                _heartbeatThread = null;
+            }
+
+            lock (_heartbeatLock)
+            {
+                if (_heartbeatThread == heartbeatThread && (heartbeatThread == null || !heartbeatThread.IsAlive))
+                {
+                    _heartbeatThread = null;
+                }
+
                 LogHelper.LogInformation("Heartbeat stopped.");
             }
         }
@@ -187,7 +199,7 @@
                 if (data != null)
                 {
                     var message = JsonSerializer.SerializeObject(data);
-                    this.TryPublishMessage(MqttConstants.DataTopic, message, MqttQoSLevel.AtLeastOnce, false, true, "sensor data");
+                    this.TryPublishMessage(MqttConstants.DataTopic, message, MqttQoSLevel.AtMostOnce, false, true, "sensor data");
                 }
                 else
                 {
@@ -227,7 +239,7 @@
                     return;
                 }
 
-                this.TryPublishMessage(MqttConstants.ErrorTopic, errorMessage, MqttQoSLevel.AtLeastOnce, false, true, "error message");
+                this.TryPublishMessage(MqttConstants.ErrorTopic, errorMessage, MqttQoSLevel.AtMostOnce, false, true, "error message");
             }
             catch (Exception ex)
             {
@@ -247,14 +259,9 @@
 
             try
             {
-                string payload = "boot; uptime=" + _uptimeService.GetUptime() +
-                                 "; freeMemory=" + GC.Run(false) +
-                                 "; previousState=" + RuntimeStateTracker.GetPreviousState() +
-                                 "; currentState=" + RuntimeStateTracker.GetLastState();
-
                 if (this.TryPublishMessage(
                     MqttConstants.RuntimeStatusTopic,
-                    payload,
+                    this.BuildRuntimeStatusPayload("boot"),
                     MqttConstants.StatusQoS,
                     true,
                     false,
@@ -319,6 +326,34 @@
             
             try
             {
+                long freeMemory = GC.Run(false);
+                if (freeMemory < MinimumFreeMemoryBeforePublish)
+                {
+                    LogHelper.LogWarning("Skipping MQTT heartbeat because free memory is low: " + freeMemory + " bytes");
+                    RuntimeStateTracker.MarkMqttPublishFailure("heartbeat|low-memory:" + freeMemory);
+                    this.ReportPublishFailure();
+                    return;
+                }
+
+                _heartbeatCount++;
+
+                if (this.TryPublishMessage(MqttConstants.HeartbeatTopic, this.BuildHeartbeatPayload(freeMemory), MqttConstants.StatusQoS, false, true, "heartbeat"))
+                {
+                    RuntimeStateTracker.MarkProgress("mqtt:heartbeat-sent");
+                }
+
+                if (_heartbeatCount % DetailedStatusEveryHeartbeats != 0)
+                {
+                    return;
+                }
+
+                freeMemory = GC.Run(false);
+                if (freeMemory < MinimumFreeMemoryForDetailedStatus)
+                {
+                    LogHelper.LogWarning("Skipping detailed MQTT status because free memory is low: " + freeMemory + " bytes");
+                    return;
+                }
+
                 if (!this.TryPublishMessage(MqttConstants.SystemStatusTopic, MqttConstants.OnlineStatusPayload, MqttConstants.StatusQoS, true, true, "system status"))
                 {
                     return;
@@ -339,14 +374,17 @@
                     return;
                 }
 
-                if (this.TryPublishMessage(MqttConstants.HeartbeatTopic, this.BuildHeartbeatPayload(), MqttConstants.StatusQoS, false, true, "heartbeat"))
-                {
-                    LogHelper.LogInformation("Heartbeat sent.");
-                }
+                this.TryPublishMessage(
+                    MqttConstants.RuntimeStatusTopic,
+                    this.BuildRuntimeStatusPayload("heartbeat"),
+                    MqttConstants.StatusQoS,
+                    true,
+                    false,
+                    "runtime status");
             }
             catch (Exception ex)
             {
-                LogHelper.LogError($"Error publishing heartbeat: {ex.Message}");
+                LogHelper.LogError("Error publishing heartbeat: " + ex.Message);
             }
         }
 
@@ -373,6 +411,20 @@
                     if (client == null || !client.IsConnected)
                     {
                         LogHelper.LogWarning("MQTT publish skipped because the client is not connected. Context: " + context);
+                        RuntimeStateTracker.MarkMqttPublishFailure(context + "|not-connected");
+                        if (raiseFailureOnError)
+                        {
+                            this.ReportPublishFailure();
+                        }
+
+                        return false;
+                    }
+
+                    long freeMemory = GC.Run(false);
+                    if (freeMemory < MinimumFreeMemoryBeforePublish)
+                    {
+                        LogHelper.LogWarning("MQTT publish skipped because free memory is low. Context: " + context + ", freeMemory=" + freeMemory + " bytes");
+                        RuntimeStateTracker.MarkMqttPublishFailure(context + "|low-memory:" + freeMemory);
                         if (raiseFailureOnError)
                         {
                             this.ReportPublishFailure();
@@ -384,6 +436,8 @@
                     client.Publish(topic, Encoding.UTF8.GetBytes(message), null, null, qosLevel, retain);
                 }
 
+                RuntimeStateTracker.MarkMqttPublishSuccess(context);
+
                 lock (_publishFailureLock)
                 {
                     _publishFailureReported = false;
@@ -394,6 +448,7 @@
             catch (Exception ex)
             {
                 LogHelper.LogError($"Error publishing {context}: {ex.Message}");
+                RuntimeStateTracker.MarkMqttPublishFailure(context + "|" + ex.Message);
                 if (raiseFailureOnError)
                 {
                     this.ReportPublishFailure();
@@ -403,16 +458,25 @@
             }
         }
 
-        private string BuildHeartbeatPayload()
+        private string BuildHeartbeatPayload(long freeMemory)
         {
             string wifiState = _connectionService.IsConnected ? "connected" : "disconnected";
-            string sensorState = this.IsSensorReadingValid(_sensorService.GetTemp(), _sensorService.GetHumidity()) ? "ok" : "invalid";
 
-            return "alive; uptime=" + _uptimeService.GetUptime() +
-                   "; freeMemory=" + GC.Run(false) +
+            return "alive; freeMemory=" + freeMemory +
                    "; wifi=" + wifiState +
-                   "; mqtt=connected" +
-                   "; sensor=" + sensorState;
+                   "; mqtt=connected";
+        }
+
+        private string BuildRuntimeStatusPayload(string reason)
+        {
+            return reason +
+                   "; utc=" + DateTime.UtcNow.ToString("u") +
+                   "; uptime=" + _uptimeService.GetUptime() +
+                   "; freeMemory=" + GC.Run(false) +
+                   "; previousState=" + RuntimeStateTracker.GetPreviousState() +
+                   "; currentState=" + RuntimeStateTracker.GetLastState() +
+                   "; watchdog=" + RuntimeStateTracker.GetWatchdogState() +
+                   "; mqttPublish=" + RuntimeStateTracker.GetMqttPublishState();
         }
 
         private string BuildWifiStatusPayload()

@@ -130,7 +130,9 @@
                     else if (command == "getstate")
                     {
                         string state = "previous=" + RuntimeStateTracker.GetPreviousState() +
-                                       "\ncurrent=" + RuntimeStateTracker.GetLastState();
+                                       "\ncurrent=" + RuntimeStateTracker.GetLastState() +
+                                       "\nwatchdog=" + RuntimeStateTracker.GetWatchdogState() +
+                                       "\nmqttPublish=" + RuntimeStateTracker.GetMqttPublishState();
                         this.Publish(MqttConstants.SystemTopic + "/state", state);
                         LogHelper.LogInformation("Runtime state requested, published");
                     }
