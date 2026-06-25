@@ -7,7 +7,7 @@ namespace ESP32_NF_MQTT_DHT.Settings
     /// </summary>
     public static class IrcSettings
     {
-        public static string Server => DeviceConfig.GetString("irc.server", "irc.server.com");
+        public static string Server => DeviceConfig.GetString("irc.server", "irc.unrealbg.com");
 
         public static int Port => DeviceConfig.GetInt32("irc.port", 6667);
 
@@ -22,6 +22,12 @@ namespace ESP32_NF_MQTT_DHT.Settings
         public static string RealName => DeviceConfig.GetString("irc.realname", DeviceSettings.DeviceName);
 
         public static string Password => DeviceConfig.GetString("irc.pass", string.Empty);
+
+        public static string NickServName => DeviceConfig.GetString("irc.nickserv.name", "NickServ");
+
+        public static string NickServCommand => DeviceConfig.GetString("irc.nickserv.command", "ID");
+
+        public static string NickServPassword => DeviceConfig.GetString("irc.nickserv.pass", string.Empty);
 
         public static string CommandPrefix => DeviceConfig.GetString("irc.cmdprefix", "!");
 

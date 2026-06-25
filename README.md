@@ -120,7 +120,19 @@ If you test the project with other hardware, feel free to contribute feedback!
      (legacy formats `sha256:<64-hex>` and plaintext are still accepted and will be migrated after first successful login)
 
 5. **Code Deployment:**  
-   Compile and upload the code to your ESP32 device.
+   For day-to-day development, use the repo deploy script instead of Visual Studio's plain deploy command. The application expects runtime files on the device filesystem (`I:\config\device.config`, credentials, and optional IRC CA), and Visual Studio only uploads the managed application by default.
+
+   ```powershell
+   .\deploy\flash-app.ps1 -SerialPort COM8
+   ```
+
+   The script rebuilds the nanoFramework app, uploads the deployment image, uploads `deploy\device.config`, `deploy\credentials.txt`, and `deploy\irc_root_ca.pem`, then resets the device. The file-deployment JSON is generated automatically from the current repo path, so stale absolute paths are avoided.
+
+   If you intentionally want to upload only the application image, pass:
+
+   ```powershell
+   .\deploy\flash-app.ps1 -SerialPort COM8 -SkipFileDeployment
+   ```
 
 ## Usage
 

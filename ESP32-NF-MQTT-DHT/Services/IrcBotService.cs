@@ -4,6 +4,7 @@ namespace ESP32_NF_MQTT_DHT.Services
     using System.Collections;
     using System.IO;
     using System.Net.Sockets;
+    using System.Net.Security;
     using System.Security.Cryptography.X509Certificates;
     using System.Text;
     using System.Threading;
@@ -11,28 +12,28 @@ namespace ESP32_NF_MQTT_DHT.Services
     using ESP32_NF_MQTT_DHT.Helpers;
     using ESP32_NF_MQTT_DHT.Services.Contracts;
 
-    using nanoFramework.M2Mqtt;
-
     using static ESP32_NF_MQTT_DHT.Settings.IrcSettings;
 
     /// <summary>
     /// Minimal IRC bot built for nanoFramework memory constraints.
-    /// Supports plain TCP and TLS using <see cref="MqttNetworkChannel"/>.
+    /// Supports plain TCP and TLS using a dedicated IRC stream.
     /// </summary>
     internal sealed class IrcBotService : IIrcBotService, IDisposable
     {
         private const int ReconnectDelayMs = 5000;
         private const int RetryAfterSocketErrorMs = 1500;
         private const int ThreadJoinTimeoutMs = 1000;
-        private const int IdleWaitMs = 250;
-        private const int ReadTimeoutMs = 1000;
+        private const int IdleWaitMs = 50;
+        private const int ReadTimeoutMs = 250;
+        private const int ReadDrainTimeoutMs = 20;
         private const int RegistrationTimeoutMs = 20000;
-        private const int ClientKeepAliveMs = 30000;
+        private const int ClientKeepAliveMs = 60000;
         private const int MaxNickLength = 24;
+        private const int MaxIrcLineLength = 512;
+        private const int MaxBytesPerReadPass = 640;
         private const int MaxServerLinesToTracePerSession = 8;
 
         private readonly IConnectionService _connectionService;
-        private readonly IInternetConnectionService _internetConnectionService;
         private readonly ISensorService _sensorService;
         private readonly IRelayService _relayService;
         private readonly IUptimeService _uptimeService;
@@ -42,17 +43,13 @@ namespace ESP32_NF_MQTT_DHT.Services
         private readonly WaitHandle[] _waitHandles;
         private readonly object _stateLock = new object();
         private readonly object _sessionLock = new object();
-        private readonly byte[] _receiveBuffer = new byte[256];
+        private readonly byte[] _receiveBuffer = new byte[128];
         private readonly StringBuilder _lineBuffer = new StringBuilder();
         private readonly Queue _pendingLines = new Queue();
 
-        private readonly EventHandler _connectionLostHandler;
-        private readonly EventHandler _connectionRestoredHandler;
-        private readonly EventHandler _internetLostHandler;
-        private readonly EventHandler _internetRestoredHandler;
-
         private Thread _workerThread;
-        private MqttNetworkChannel _channel;
+        private TcpClient _tcpClient;
+        private NetworkStream _stream;
 
         private bool _isRunning;
         private bool _isDisposed;
@@ -65,6 +62,8 @@ namespace ESP32_NF_MQTT_DHT.Services
         private DateTime _connectedAtUtc;
         private DateTime _lastInboundAtUtc;
         private DateTime _lastOutboundAtUtc;
+        private DateTime _lastClientPingAtUtc;
+        private bool _nickServIdentifySent;
 
         public IrcBotService(
             IConnectionService connectionService,
@@ -74,20 +73,14 @@ namespace ESP32_NF_MQTT_DHT.Services
             IUptimeService uptimeService)
         {
             _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
-            _internetConnectionService = internetConnectionService ?? throw new ArgumentNullException(nameof(internetConnectionService));
+            if (internetConnectionService == null)
+            {
+                throw new ArgumentNullException(nameof(internetConnectionService));
+            }
+
             _sensorService = sensorService ?? throw new ArgumentNullException(nameof(sensorService));
             _relayService = relayService ?? throw new ArgumentNullException(nameof(relayService));
             _uptimeService = uptimeService ?? throw new ArgumentNullException(nameof(uptimeService));
-
-            _connectionLostHandler = (s, e) => this.OnConnectivityChanged(false, "WiFi");
-            _connectionRestoredHandler = (s, e) => this.OnConnectivityChanged(true, "WiFi");
-            _internetLostHandler = (s, e) => this.OnConnectivityChanged(false, "Internet");
-            _internetRestoredHandler = (s, e) => this.OnConnectivityChanged(true, "Internet");
-
-            _connectionService.ConnectionLost += _connectionLostHandler;
-            _connectionService.ConnectionRestored += _connectionRestoredHandler;
-            _internetConnectionService.InternetLost += _internetLostHandler;
-            _internetConnectionService.InternetRestored += _internetRestoredHandler;
 
             _waitHandles = new WaitHandle[] { _stopSignal, _wakeSignal };
         }
@@ -164,11 +157,6 @@ namespace ESP32_NF_MQTT_DHT.Services
             try
             {
                 this.Stop();
-
-                _connectionService.ConnectionLost -= _connectionLostHandler;
-                _connectionService.ConnectionRestored -= _connectionRestoredHandler;
-                _internetConnectionService.InternetLost -= _internetLostHandler;
-                _internetConnectionService.InternetRestored -= _internetRestoredHandler;
             }
             finally
             {
@@ -180,18 +168,18 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             while (this.GetIsRunning())
             {
-                if (!this.EnsureConnectivity())
-                {
-                    if (this.WaitForWake(ReconnectDelayMs))
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
                 if (!this.IsSessionActive())
                 {
+                    if (!this.EnsureWifiReadyForConnect())
+                    {
+                        if (this.WaitForWake(ReconnectDelayMs))
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
                     if (!this.TryConnect())
                     {
                         if (this.WaitForWake(ReconnectDelayMs))
@@ -278,7 +266,7 @@ namespace ESP32_NF_MQTT_DHT.Services
             return true;
         }
 
-        private bool EnsureConnectivity()
+        private bool EnsureWifiReadyForConnect()
         {
             try
             {
@@ -292,26 +280,11 @@ namespace ESP32_NF_MQTT_DHT.Services
                     }
                 }
 
-                // Do not hard-block IRC on the generic internet probe.
-                // The probe uses TCP/53 to public DNS and may fail on some networks even when the
-                // target IRC server is reachable. The actual IRC connect attempt is a better signal.
-                try
-                {
-                    if (!_internetConnectionService.IsInternetAvailable())
-                    {
-                        this.LogIrcState("Generic internet probe failed; attempting direct IRC connection anyway.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    this.LogIrcState("Generic internet probe threw before IRC connect: " + ex.Message, ex);
-                }
-
                 return true;
             }
             catch (Exception ex)
             {
-                LogHelper.LogError("IRC connectivity check failed: " + ex.Message, ex);
+                LogHelper.LogError("IRC WiFi readiness check failed: " + ex.Message, ex);
                 return false;
             }
         }
@@ -345,34 +318,44 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private bool TryConnectCore(bool validateServerCertificate)
         {
-            MqttNetworkChannel channel = null;
+            TcpClient client = null;
+            NetworkStream stream = null;
 
             try
             {
-                channel = this.CreateNetworkChannel(validateServerCertificate);
-
                 this.LogIrcState(
                     "Connecting IRC bot to " + Server + ":" + Port +
                     (UseTls ? " (TLS" + (validateServerCertificate ? ", validated" : ", unvalidated") + ")" : string.Empty) +
                     " as '" + _currentNick + "'.");
 
-                channel.Connect();
+                client = new TcpClient();
+                client.NoDelay = true;
+                client.Connect(Server, Port);
+
+                stream = this.CreateIrcStream(client, validateServerCertificate);
+                stream.ReadTimeout = ReadTimeoutMs;
+                stream.WriteTimeout = 5000;
+
                 this.LogIrcState("Socket connected. Sending IRC registration commands.");
 
                 lock (_sessionLock)
                 {
-                    _channel = channel;
+                    _tcpClient = client;
+                    _stream = stream;
                     _hasJoined = false;
                     _registrationAccepted = false;
                     _serverLinesTracedThisSession = 0;
                     _connectedAtUtc = DateTime.UtcNow;
                     _lastInboundAtUtc = _connectedAtUtc;
                     _lastOutboundAtUtc = _connectedAtUtc;
+                    _lastClientPingAtUtc = DateTime.MinValue;
+                    _nickServIdentifySent = false;
                     _lineBuffer.Length = 0;
                     _pendingLines.Clear();
                 }
 
-                channel = null;
+                client = null;
+                stream = null;
 
                 if (!string.IsNullOrEmpty(Password))
                 {
@@ -407,7 +390,15 @@ namespace ESP32_NF_MQTT_DHT.Services
 
                 try
                 {
-                    channel?.Close();
+                    stream?.Close();
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    client?.Close();
                 }
                 catch
                 {
@@ -418,11 +409,11 @@ namespace ESP32_NF_MQTT_DHT.Services
             }
         }
 
-        private MqttNetworkChannel CreateNetworkChannel(bool validateServerCertificate)
+        private NetworkStream CreateIrcStream(TcpClient client, bool validateServerCertificate)
         {
             if (!UseTls)
             {
-                return new MqttNetworkChannel(Server, Port);
+                return client.GetStream();
             }
 
             X509Certificate caCertificate = this.TryLoadCaCertificate();
@@ -439,15 +430,19 @@ namespace ESP32_NF_MQTT_DHT.Services
                 validateServerCertificate = false;
             }
 
-            var channel = new MqttNetworkChannel(Server, Port, true, caCertificate, null, MqttSslProtocols.TLSv1_2);
-            channel.ValidateServerCertificate = validateServerCertificate;
+            var stream = new SslStream(client.Client);
 
             if (!validateServerCertificate)
             {
+                stream.SslVerification = SslVerification.NoVerification;
                 this.LogIrcState("TLS server certificate validation is disabled.");
+                stream.AuthenticateAsClient(Server, SslProtocols.Tls12);
+                return stream;
             }
 
-            return channel;
+            stream.SslVerification = SslVerification.CertificateRequired;
+            stream.AuthenticateAsClient(Server, null, caCertificate, SslProtocols.Tls12);
+            return stream;
         }
 
         private X509Certificate TryLoadCaCertificate()
@@ -539,7 +534,7 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             lock (_sessionLock)
             {
-                return _channel != null;
+                return _stream != null;
             }
         }
 
@@ -552,56 +547,84 @@ namespace ESP32_NF_MQTT_DHT.Services
                 return true;
             }
 
-            MqttNetworkChannel channel;
+            NetworkStream stream;
             lock (_sessionLock)
             {
-                channel = _channel;
+                stream = _stream;
             }
 
-            if (channel == null)
+            if (stream == null)
             {
                 this.CheckRegistrationTimeout();
                 this.CheckClientKeepAlive();
                 return false;
             }
 
-            int read;
-            try
+            bool receivedAny = false;
+            int readPassBytes = 0;
+
+            while (readPassBytes < MaxBytesPerReadPass)
             {
-                read = channel.Receive(_receiveBuffer, ReadTimeoutMs);
-            }
-            catch (SocketException ex)
-            {
-                if (this.IsLikelyTimeout(ex))
+                int read;
+                try
                 {
-                    this.CheckRegistrationTimeout();
-                    this.CheckClientKeepAlive();
-                    return false;
+                    int timeout = receivedAny ? ReadDrainTimeoutMs : ReadTimeoutMs;
+                    stream.ReadTimeout = timeout;
+                    read = stream.Read(_receiveBuffer, 0, _receiveBuffer.Length);
+                }
+                catch (SocketException ex)
+                {
+                    if (this.IsLikelyTimeout(ex))
+                    {
+                        if (!receivedAny)
+                        {
+                            this.CheckRegistrationTimeout();
+                            this.CheckClientKeepAlive();
+                        }
+
+                        return this.TryDequeuePendingLine(out line);
+                    }
+
+                    throw;
+                }
+                catch (IOException ex)
+                {
+                    if (this.IsLikelyTimeout(ex))
+                    {
+                        if (!receivedAny)
+                        {
+                            this.CheckRegistrationTimeout();
+                            this.CheckClientKeepAlive();
+                        }
+
+                        return this.TryDequeuePendingLine(out line);
+                    }
+
+                    throw;
                 }
 
-                throw;
-            }
-            catch (IOException ex)
-            {
-                if (this.IsLikelyTimeout(ex))
+                if (read <= 0)
                 {
-                    this.CheckRegistrationTimeout();
-                    this.CheckClientKeepAlive();
-                    return false;
+                    if (!receivedAny)
+                    {
+                        this.CheckRegistrationTimeout();
+                        this.CheckClientKeepAlive();
+                    }
+
+                    return this.TryDequeuePendingLine(out line);
                 }
 
-                throw;
+                receivedAny = true;
+                readPassBytes += read;
+                this.ProcessReceivedBytes(read);
+
+                if (this.TryDequeuePendingLine(out line))
+                {
+                    return true;
+                }
             }
 
-            if (read <= 0)
-            {
-                this.CheckRegistrationTimeout();
-                this.CheckClientKeepAlive();
-                return false;
-            }
-
-            this.ProcessReceivedBytes(read);
-            return this.TryDequeuePendingLine(out line);
+            return false;
         }
 
         private void CheckRegistrationTimeout()
@@ -610,7 +633,7 @@ namespace ESP32_NF_MQTT_DHT.Services
 
             lock (_sessionLock)
             {
-                if (_channel == null || _registrationAccepted)
+                if (_stream == null || _registrationAccepted)
                 {
                     return;
                 }
@@ -635,25 +658,29 @@ namespace ESP32_NF_MQTT_DHT.Services
 
             lock (_sessionLock)
             {
-                if (_channel == null)
+                if (_stream == null)
                 {
                     return;
                 }
 
-                TimeSpan inboundIdle = DateTime.UtcNow - _lastInboundAtUtc;
-                TimeSpan outboundIdle = DateTime.UtcNow - _lastOutboundAtUtc;
+                DateTime now = DateTime.UtcNow;
+                TimeSpan inboundIdle = now - _lastInboundAtUtc;
+                TimeSpan outboundIdle = now - _lastOutboundAtUtc;
+                TimeSpan pingWait = now - _lastClientPingAtUtc;
 
                 if (inboundIdle.TotalMilliseconds >= ClientKeepAliveMs &&
-                    outboundIdle.TotalMilliseconds >= ClientKeepAliveMs)
+                    outboundIdle.TotalMilliseconds >= ClientKeepAliveMs &&
+                    (_lastClientPingAtUtc == DateTime.MinValue || pingWait.TotalMilliseconds >= ClientKeepAliveMs))
                 {
                     shouldSendKeepAlive = true;
+                    _lastClientPingAtUtc = now;
                 }
             }
 
             if (shouldSendKeepAlive)
             {
                 this.LogIrcState("No inbound traffic for " + ClientKeepAliveMs + "ms. Sending client keepalive PING " + Server + ".");
-                this.SendRaw("PING " + Server);
+                this.SendRaw("PING :" + Server);
             }
         }
 
@@ -687,7 +714,15 @@ namespace ESP32_NF_MQTT_DHT.Services
                         continue;
                     }
 
-                    _lineBuffer.Append(ch);
+                    if (_lineBuffer.Length < MaxIrcLineLength)
+                    {
+                        _lineBuffer.Append(ch);
+                    }
+                    else
+                    {
+                        _lineBuffer.Length = 0;
+                        this.LogIrcState("Dropped oversized IRC line.");
+                    }
                 }
             }
         }
@@ -734,8 +769,7 @@ namespace ESP32_NF_MQTT_DHT.Services
 
             if (command == "PING")
             {
-                this.LogIrcState("Server PING received. Sending PONG.");
-                this.SendRaw("PONG :" + this.TrimLeadingColon(parameters));
+                this.SendPong(parameters);
                 return;
             }
 
@@ -762,6 +796,7 @@ namespace ESP32_NF_MQTT_DHT.Services
                 }
 
                 this.LogIrcState("Server accepted registration (001).");
+                this.IdentifyWithNickServ();
                 this.JoinConfiguredChannel();
                 return;
             }
@@ -783,6 +818,19 @@ namespace ESP32_NF_MQTT_DHT.Services
             {
                 this.HandlePrivMsg(prefix, parameters);
             }
+        }
+
+        private void SendPong(string pingParameters)
+        {
+            if (string.IsNullOrEmpty(pingParameters))
+            {
+                this.LogIrcState("Server PING received without parameters. Sending generic PONG.");
+                this.SendRaw("PONG :" + Server);
+                return;
+            }
+
+            this.LogIrcState("Server PING received. Sending PONG.");
+            this.SendRaw("PONG " + pingParameters);
         }
 
         private bool TryParseLine(string line, out string prefix, out string command, out string parameters)
@@ -852,6 +900,60 @@ namespace ESP32_NF_MQTT_DHT.Services
             }
         }
 
+        private void IdentifyWithNickServ()
+        {
+            string password = NickServPassword;
+            if (string.IsNullOrEmpty(password))
+            {
+                return;
+            }
+
+            string serviceName = this.GetNickServName();
+            string command = this.GetNickServCommand();
+            if (string.IsNullOrEmpty(serviceName) || string.IsNullOrEmpty(command))
+            {
+                this.LogIrcState("NickServ identify skipped because service name or command is empty.");
+                return;
+            }
+
+            lock (_sessionLock)
+            {
+                if (_nickServIdentifySent)
+                {
+                    return;
+                }
+
+                _nickServIdentifySent = true;
+            }
+
+            bool sent = this.SendNickServIdentifyCommand(serviceName, command, password);
+
+            if (!this.EqualsIgnoreCase(command, "IDENTIFY"))
+            {
+                sent = this.SendNickServIdentifyCommand(serviceName, "IDENTIFY", password) || sent;
+            }
+
+            if (!this.EqualsIgnoreCase(command, "ID"))
+            {
+                sent = this.SendNickServIdentifyCommand(serviceName, "ID", password) || sent;
+            }
+
+            if (sent)
+            {
+                this.LogIrcState("NickServ identify sequence sent to " + serviceName + ".");
+            }
+        }
+
+        private bool SendNickServIdentifyCommand(string serviceName, string command, string password)
+        {
+            if (string.IsNullOrEmpty(serviceName) || string.IsNullOrEmpty(command) || string.IsNullOrEmpty(password))
+            {
+                return false;
+            }
+
+            return this.SendRaw("PRIVMSG " + serviceName + " :" + command + " " + this.SanitizeMessage(password));
+        }
+
         private void HandlePrivMsg(string prefix, string parameters)
         {
             if (string.IsNullOrEmpty(parameters))
@@ -872,14 +974,21 @@ namespace ESP32_NF_MQTT_DHT.Services
                 return;
             }
 
+            string senderNick = this.GetNickFromPrefix(prefix);
+            string replyTarget = this.IsPrivateTarget(target) ? senderNick : target;
+
+            if (this.IsCtcpPing(message))
+            {
+                this.SendRaw("NOTICE " + senderNick + " :" + message);
+                return;
+            }
+
             string prefixToken = this.GetCommandPrefix();
             if (!this.StartsWith(message, prefixToken))
             {
                 return;
             }
 
-            string senderNick = this.GetNickFromPrefix(prefix);
-            string replyTarget = this.IsPrivateTarget(target) ? senderNick : target;
             string commandText = message.Substring(prefixToken.Length).Trim();
 
             if (string.IsNullOrEmpty(commandText))
@@ -904,7 +1013,10 @@ namespace ESP32_NF_MQTT_DHT.Services
                 switch (command)
                 {
                     case "help":
-                        this.Reply(replyTarget, "Commands: !help, !temp, !humidity, !status, !relay on|off|status, !uptime, !ip");
+                        this.Reply(replyTarget, "Commands: !help, !ping, !temp, !humidity, !status, !relay on|off|status, !uptime, !ip");
+                        break;
+                    case "ping":
+                        this.Reply(replyTarget, "pong");
                         break;
                     case "temp":
                         this.Reply(replyTarget, "Temp: " + _sensorService.GetTemp() + " C");
@@ -985,13 +1097,13 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private bool SendRaw(string line)
         {
-            MqttNetworkChannel channel;
+            NetworkStream stream;
             lock (_sessionLock)
             {
-                channel = _channel;
+                stream = _stream;
             }
 
-            if (channel == null)
+            if (stream == null)
             {
                 return false;
             }
@@ -999,11 +1111,8 @@ namespace ESP32_NF_MQTT_DHT.Services
             try
             {
                 byte[] payload = Encoding.UTF8.GetBytes(line + "\r\n");
-                int sent = channel.Send(payload);
-                if (sent <= 0)
-                {
-                    throw new IOException("IRC channel send returned no data.");
-                }
+                stream.Write(payload, 0, payload.Length);
+                stream.Flush();
 
                 if (this.StartsWith(line, "PASS "))
                 {
@@ -1011,7 +1120,7 @@ namespace ESP32_NF_MQTT_DHT.Services
                 }
                 else
                 {
-                    LogHelper.LogDebug("IRC >> " + line);
+                    LogHelper.LogDebug("IRC >> " + this.RedactSensitiveOutboundLine(line));
                 }
 
                 lock (_sessionLock)
@@ -1021,7 +1130,7 @@ namespace ESP32_NF_MQTT_DHT.Services
 
                 if (!this.StartsWith(line, "PASS "))
                 {
-                    this.LogIrcState("Sent: " + this.TruncateForLog(line, 120));
+                    this.LogIrcState("Sent: " + this.TruncateForLog(this.RedactSensitiveOutboundLine(line), 120));
                 }
 
                 return true;
@@ -1036,55 +1145,43 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private void SafeDisconnect()
         {
-            MqttNetworkChannel channel;
+            NetworkStream stream;
+            TcpClient client;
 
             lock (_sessionLock)
             {
-                channel = _channel;
+                stream = _stream;
+                client = _tcpClient;
 
-                _channel = null;
+                _stream = null;
+                _tcpClient = null;
                 _hasJoined = false;
                 _registrationAccepted = false;
                 _serverLinesTracedThisSession = 0;
                 _connectedAtUtc = DateTime.MinValue;
                 _lastInboundAtUtc = DateTime.MinValue;
                 _lastOutboundAtUtc = DateTime.MinValue;
+                _lastClientPingAtUtc = DateTime.MinValue;
+                _nickServIdentifySent = false;
                 _lineBuffer.Length = 0;
                 _pendingLines.Clear();
             }
 
             try
             {
-                channel?.Close();
+                stream?.Close();
             }
             catch
             {
             }
-        }
 
-        private void OnConnectivityChanged(bool restored, string source)
-        {
-            if (_isDisposed)
+            try
             {
-                return;
+                client?.Close();
             }
-
-            if (!this.IsStartRequested())
+            catch
             {
-                return;
             }
-
-            if (restored)
-            {
-                this.LogIrcState(source + " restored.");
-                _wakeSignal.Set();
-                this.Start();
-                return;
-            }
-
-            this.LogIrcState(source + " lost.");
-            this.SafeDisconnect();
-            _wakeSignal.Set();
         }
 
         private void TraceServerLine(string line)
@@ -1115,13 +1212,40 @@ namespace ESP32_NF_MQTT_DHT.Services
 
         private bool IsLikelyTimeout(Exception ex)
         {
-            if (ex == null || string.IsNullOrEmpty(ex.Message))
+            while (ex != null)
             {
-                return false;
+                SocketException socketException = ex as SocketException;
+                if (socketException != null && this.IsTransientSocketReadError(socketException.ErrorCode))
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrEmpty(ex.Message))
+                {
+                    string message = ex.Message.ToLower();
+                    if (message.IndexOf("timeout") >= 0 ||
+                        message.IndexOf("timed out") >= 0 ||
+                        message.IndexOf("would block") >= 0 ||
+                        message.IndexOf("try again") >= 0 ||
+                        message.IndexOf("temporarily unavailable") >= 0)
+                    {
+                        return true;
+                    }
+                }
+
+                ex = ex.InnerException;
             }
 
-            string message = ex.Message.ToLower();
-            return message.IndexOf("timeout") >= 0 || message.IndexOf("timed out") >= 0;
+            return false;
+        }
+
+        private bool IsTransientSocketReadError(int errorCode)
+        {
+            SocketError socketError = (SocketError)errorCode;
+            return socketError == SocketError.TimedOut ||
+                socketError == SocketError.WouldBlock ||
+                socketError == SocketError.InProgress ||
+                socketError == SocketError.AlreadyInProgress;
         }
 
         private bool WaitForWake(int timeoutMs)
@@ -1242,6 +1366,29 @@ namespace ESP32_NF_MQTT_DHT.Services
             return string.IsNullOrEmpty(prefix) ? "!" : prefix;
         }
 
+        private string GetNickServName()
+        {
+            return this.SanitizeNick(NickServName, "NickServ");
+        }
+
+        private string GetNickServCommand()
+        {
+            string command = NickServCommand;
+            if (string.IsNullOrEmpty(command))
+            {
+                return "ID";
+            }
+
+            command = command.Trim();
+            int separator = command.IndexOf(' ');
+            if (separator > 0)
+            {
+                command = command.Substring(0, separator);
+            }
+
+            return string.IsNullOrEmpty(command) ? "ID" : command;
+        }
+
         private string GetNickFromPrefix(string prefix)
         {
             if (string.IsNullOrEmpty(prefix))
@@ -1269,6 +1416,65 @@ namespace ESP32_NF_MQTT_DHT.Services
             return first != '#' && first != '&' && first != '+' && first != '!';
         }
 
+        private bool IsCtcpPing(string message)
+        {
+            if (string.IsNullOrEmpty(message) || message.Length < 6)
+            {
+                return false;
+            }
+
+            return message[0] == '\u0001' && this.StartsWith(message.Substring(1), "PING");
+        }
+
+        private string RedactSensitiveOutboundLine(string line)
+        {
+            string redactedNickServLine = this.TryRedactNickServIdentifyLine(line);
+            if (redactedNickServLine != null)
+            {
+                return redactedNickServLine;
+            }
+
+            return line;
+        }
+
+        private string TryRedactNickServIdentifyLine(string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return null;
+            }
+
+            string serviceName = this.GetNickServName();
+            string configuredCommand = this.GetNickServCommand();
+
+            if (this.IsNickServIdentifyLine(line, serviceName, configuredCommand))
+            {
+                return "PRIVMSG " + serviceName + " :" + configuredCommand + " ***";
+            }
+
+            if (this.IsNickServIdentifyLine(line, serviceName, "IDENTIFY"))
+            {
+                return "PRIVMSG " + serviceName + " :IDENTIFY ***";
+            }
+
+            if (this.IsNickServIdentifyLine(line, serviceName, "ID"))
+            {
+                return "PRIVMSG " + serviceName + " :ID ***";
+            }
+
+            return null;
+        }
+
+        private bool IsNickServIdentifyLine(string line, string serviceName, string command)
+        {
+            if (string.IsNullOrEmpty(line) || string.IsNullOrEmpty(serviceName) || string.IsNullOrEmpty(command))
+            {
+                return false;
+            }
+
+            return this.StartsWith(line, "PRIVMSG " + serviceName + " :" + command + " ");
+        }
+
         private bool StartsWith(string value, string prefix)
         {
             if (value == null || prefix == null)
@@ -1292,14 +1498,37 @@ namespace ESP32_NF_MQTT_DHT.Services
             return true;
         }
 
-        private string TrimLeadingColon(string value)
+        private bool EqualsIgnoreCase(string left, string right)
         {
-            if (string.IsNullOrEmpty(value))
+            if (left == null || right == null)
             {
-                return string.Empty;
+                return left == right;
             }
 
-            return value[0] == ':' ? value.Substring(1) : value;
+            if (left.Length != right.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Length; i++)
+            {
+                if (this.ToUpperAscii(left[i]) != this.ToUpperAscii(right[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private char ToUpperAscii(char ch)
+        {
+            if (ch >= 'a' && ch <= 'z')
+            {
+                return (char)(ch - 32);
+            }
+
+            return ch;
         }
 
         private string SanitizeMessage(string message)

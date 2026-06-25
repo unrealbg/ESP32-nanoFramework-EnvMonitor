@@ -13,6 +13,7 @@ namespace ESP32_NF_MQTT_DHT.Services
     public class HealthProbeService : IHealthProbeService, IDisposable
     {
         private const int SocketTimeoutMs = 3000;
+        private const int SocketErrorRetryDelayMs = 1000;
 
         private readonly IUptimeService _uptimeService;
         private readonly IConnectionService _connectionService;
@@ -154,6 +155,7 @@ namespace ESP32_NF_MQTT_DHT.Services
                         {
                             LogHelper.LogError("Health probe socket error: " + ex.Message);
                             LogService.LogCritical("Health probe socket error: " + ex.Message);
+                            Thread.Sleep(SocketErrorRetryDelayMs);
                         }
                     }
                     catch (Exception ex)
@@ -260,7 +262,7 @@ namespace ESP32_NF_MQTT_DHT.Services
         {
             if (!_disposed)
             {
-                this.Stop();
+                LogHelper.LogWarning("Health probe keeping listener active after connection lost event.");
             }
         }
     }
