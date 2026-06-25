@@ -100,7 +100,7 @@ namespace ESP32_NF_MQTT_DHT.Configuration
             /// Enables the IRC bot client. Runtime connection details still come from <c>device.config</c>
             /// and the bot does not start unless at least <c>irc.server</c> is configured.
             /// </summary>
-            public static bool EnableIrcBot => DeviceConfig.GetBoolean("feature.irc.enabled", false);
+            public static bool EnableIrcBot => DeviceConfig.GetBoolean("feature.irc.enabled", true);
 
             /// <summary>
             /// Enables the TCP console listener (command shell).

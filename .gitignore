@@ -365,3 +365,4 @@ FodyWeavers.xsd
 # Local deployment files: keep templates, ignore real device-specific configs
 deploy/*
 !deploy/*.template
+!deploy/flash-app.ps1

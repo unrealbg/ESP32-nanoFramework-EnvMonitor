@@ -38,6 +38,9 @@ irc.nick=ESP32Bot
 irc.user=esp32
 irc.realname=ESP32 nanoFramework Bot
 irc.pass=
+irc.nickserv.name=NickServ
+irc.nickserv.command=ID
+irc.nickserv.pass=
 # Set to true only when I:\irc_root_ca.pem contains the server root CA.
 # If true and the file is missing, the bot falls back to insecure TLS automatically.
 irc.validateServerCertificate=true
