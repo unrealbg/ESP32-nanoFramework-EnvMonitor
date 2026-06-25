@@ -7,7 +7,9 @@
 - [Tested Hardware](#tested-hardware)
 - [Setup](#setup)
 - [Usage](#usage)
+- [Health Monitoring](#health-monitoring)
 - [Remote Management (TCP Listener & MQTT Commands)](#remote-management-tcp-listener--mqtt-commands)
+- [IRC Bot](#irc-bot)
 - [Secure OTA Updates (nanoFramework ESP32)](#secure-ota-updates-nanoframework-esp32)
 - [OTA External Modules & HealthModule (Step-by-Step)](#ota-external-modules--healthmodule-step-by-step)
 - [Troubleshooting](#troubleshooting)
@@ -41,7 +43,7 @@ I acknowledge that the code may not be perfect and there are certainly areas tha
 
 - The required nanoFramework firmware version depends on the NuGet packages used in this project.
 - To ensure compatibility, use the firmware version that matches the latest tested state of this repository.
-- The last tested firmware version for this project was **1.12.4.289**.
+- The last tested firmware target/version for this project was **ESP32_S3 1.16.0.568**.
 - You can check your current firmware version using the **Device Explorer** in the nanoFramework extension for Visual Studio or by running:
 
 ```sh
@@ -51,7 +53,7 @@ nanoff --platform esp32 --target <YOUR_ESP32_TARGET> --serialport <YOUR_COM_PORT
 - If needed, update your firmware to the version used in this project:
   
 ```sh
-nanoff --platform esp32 --target <YOUR_ESP32_TARGET> --serialport <YOUR_COM_PORT> --masserase --update --fwversion 1.12.4.14
+nanoff --platform esp32 --target ESP32_S3 --serialport <YOUR_COM_PORT> --masserase --update --fwversion 1.16.0.568
 ```
 
 - Important: Replace `<YOUR_ESP32_TARGET>` with the correct target for your device (e.g., ESP32_WROOM_32, ESP32_S3, ESP32_C3). You can find the available targets by running:
@@ -92,24 +94,37 @@ If you test the project with other hardware, feel free to contribute feedback!
    Install the C# nanoFramework on your ESP32 device. Detailed instructions are available [here](https://docs.nanoframework.net/content/getting-started-guides/getting-started-managed.html).
 
 2. **Sensor Connection:**  
-   Connect the DHT21, AHT10, or SHTC3 sensor to your ESP32 device as per the sensor's documentation. Select the sensor in the code during setup.
+   Connect the DHT21, AHT10, or SHTC3 sensor to your ESP32 device as per the sensor's documentation. Select the active sensor at runtime with `sensor.type` in `device.config`.
 
 3. **MQTT Broker Setup:**  
    Set up an MQTT broker (like Mosquitto) on your network. Note down the hostname and port number.
 
 4. **Code Configuration:**  
-   For nanoFramework it's best to keep secrets out of firmware. This project loads Wi‑Fi and MQTT settings from the device filesystem:
+   For nanoFramework it's best to keep secrets out of firmware. This project loads Wi-Fi, MQTT, health probe, and IRC settings from the device filesystem:
 
    Create `I:\config\device.config` on the device with `key=value` pairs:
 
    - `wifi.ssid=YourWifiSsid`
    - `wifi.password=YourWifiPassword`
+   - `feature.sensor.enabled=true`
+   - `feature.mqtt.enabled=true`
+   - `feature.irc.enabled=true`
+   - `feature.healthProbe.enabled=true`
+   - `feature.watchdog.reboot.enabled=false`
+   - `health.port=31338`
    - `mqtt.broker=your-broker-hostname`
    - `mqtt.port=1883`
    - `mqtt.tls=false`
+   - `mqtt.lwt=true`
    - `mqtt.user=yourUser`
    - `mqtt.pass=yourPass`
    - `sensor.type=SHTC3` (or `DHT21`, `AHT10`)
+   - `irc.server=irc.example.net`
+   - `irc.port=6697`
+   - `irc.tls=true`
+   - `irc.channel=#your-channel`
+   - `irc.nick=ESP32Bot`
+   - `irc.nickserv.pass=yourNickServPassword`
 
    Device identity (name/location) remains in `DeviceSettings`.
 
@@ -118,6 +133,10 @@ If you test the project with other hardware, feel free to contribute feedback!
    - Line 1: username
    - Line 2 (recommended): `sha256:<salt-hex>:<64-hex>`
      (legacy formats `sha256:<64-hex>` and plaintext are still accepted and will be migrated after first successful login)
+
+   Do not deploy a comment-only credentials template as the real `credentials.txt`. If the file is missing or invalid, the firmware falls back to the built-in `admin/admin` login; change it immediately from the Auth UI or TCP console.
+
+   Use the files in `deploy\*.template` as examples. Real local files such as `deploy\device.config`, `deploy\credentials.txt`, `deploy\irc_root_ca.pem`, and the `firmware-cache\` download cache are ignored by Git and should not be committed.
 
 5. **Code Deployment:**  
    For day-to-day development, use the repo deploy script instead of Visual Studio's plain deploy command. The application expects runtime files on the device filesystem (`I:\config\device.config`, credentials, and optional IRC CA), and Visual Studio only uploads the managed application by default.
@@ -138,9 +157,42 @@ If you test the project with other hardware, feel free to contribute feedback!
 
 Once the setup is complete, the ESP32 device will start publishing temperature and humidity data from the selected sensor (DHT21, AHT10, or SHTC3) to an MQTT topic. Subscribe to this topic to receive real-time updates. The system also supports publishing custom messages to the MQTT topic.
 
+## Health Monitoring
+
+The application exposes two independent availability signals so external monitors can tell the difference between a dead device and a temporary MQTT/network issue.
+
+### TCP health probe
+
+When `feature.healthProbe.enabled=true`, the device listens on `health.port` (default `31338`) and returns a compact text snapshot. A healthy response looks like:
+
+```text
+ok; probe=alive
+ok; device=ESP32-S3; utc=2026-06-25 16:26:47Z; uptime=0 days, 0 hours, 0 minutes, 24 seconds; ip=192.168.1.x; wifi=connected; mqtt=connected; freeMemory=25416; state=...; watchdog=watchdog:ok; mqttPublish=...
+```
+
+For alerting, treat `probe=alive` as proof that the managed application is still running. If the probe responds with `mqtt=disconnected` or `mqtt=not-initialized`, the device is alive and the MQTT subsystem should be investigated separately.
+
+### MQTT status topics
+
+The MQTT publisher sends a heartbeat every 60 seconds:
+
+- `home/{DeviceName}/system/status/heartbeat`: `alive; status=online; freeMemory=...; wifi=connected; mqtt=connected`
+- `home/{DeviceName}/system/status`: retained `online`, refreshed on every heartbeat
+
+When `mqtt.lwt=true`, the MQTT client also registers a Last Will message so the broker can publish retained `offline` to `home/{DeviceName}/system/status` if the client disconnects unexpectedly.
+
+Detailed subsystem status is published less frequently to reduce memory and broker load:
+
+- `home/{DeviceName}/system/status/wifi`
+- `home/{DeviceName}/system/status/mqtt`
+- `home/{DeviceName}/system/status/sensor`
+- `home/{DeviceName}/system/status/runtime`
+
+External Telegram or uptime monitors should use retry/grace windows before sending an offline alert. A single missed TCP connect or one retained MQTT `offline` event can happen during reconnect and does not always mean the device rebooted.
+
 ## Remote Management (TCP Listener & MQTT Commands)
 
-The device can be remotely managed over the network using the built-in TCP Listener. By default, the TCP service listens on port 31337. You can connect using a standard terminal (e.g., PuTTY, netcat, or telnet) to the device's IP address and port.
+The device can be remotely managed over the network using the built-in TCP Listener when `feature.tcp.enabled=true`. The TCP service listens on port 31337. You can connect using a standard terminal (e.g., PuTTY, netcat, or telnet) to the device's IP address and port.
 
 ### TCP Listener
 
@@ -173,9 +225,12 @@ Below is an example session after logging in:
 - **reboot**: Reboots the device.
 
 ### Authentication
-**Default credentials:**  
+If `I:\config\credentials.txt` is missing or invalid, the firmware uses fallback credentials:
+
 Username: `admin`  
 Password: `admin`
+
+Change these credentials immediately after first boot.
 
 ---
 
@@ -200,6 +255,42 @@ Publish commands to the respective MQTT topics below:
 
 - **Error Logging (`home/<DeviceName>/errors`):**
   - Publish error messages for logging and debugging.
+
+---
+
+## IRC Bot
+
+The optional IRC bot is enabled with `feature.irc.enabled=true`. It keeps a separate IRC connection from MQTT, supports plain TCP or TLS, and can identify with NickServ.
+
+Relevant `device.config` keys:
+
+- `irc.server`
+- `irc.port` (`6697` for common TLS deployments)
+- `irc.tls=true|false`
+- `irc.channel`
+- `irc.nick`
+- `irc.user`
+- `irc.realname`
+- `irc.pass` (server password, usually empty)
+- `irc.nickserv.name=NickServ`
+- `irc.nickserv.command=ID`
+- `irc.nickserv.pass`
+- `irc.validateServerCertificate=true|false`
+- `irc.ca.path=I:\irc_root_ca.pem`
+- `irc.cmdprefix=!`
+
+If certificate validation is enabled, deploy a CA certificate PEM to `I:\irc_root_ca.pem`. If the CA file is missing, the bot falls back to TLS without server certificate validation and logs that fallback.
+
+Supported commands:
+
+- `!help`
+- `!ping`
+- `!temp`
+- `!humidity`
+- `!status`
+- `!relay on|off|status`
+- `!uptime`
+- `!ip`
 
 ---
 
@@ -629,6 +720,13 @@ Contributions are welcome! Please follow these steps to contribute:
 - Special thanks to everyone who contributed to this project.
 
 ## Changelog
+
+### [v1.4.0] - 2026-06-25
+- Added runtime `device.config` feature gates for MQTT, IRC, health probe, web, TCP console, OTA over MQTT, and watchdog reboot behavior.
+- Added TCP health probe on port `31338` with Wi-Fi, MQTT, memory, runtime state, and watchdog diagnostics.
+- Updated MQTT availability reporting so retained `system/status=online` is refreshed on every heartbeat while Last Will can still publish `offline`.
+- Added a resilient IRC bot with TLS, optional CA validation, NickServ identify support, and basic sensor/relay/status commands.
+- Added deployment templates and `flash-app.ps1`; real local deploy files and `firmware-cache/` are ignored by Git.
 
 ### [v1.3.0] - 2025-08-15
 - **OTA External Modules**: Support for loading `.pe` modules from `I:/data/app/modules` at boot.
