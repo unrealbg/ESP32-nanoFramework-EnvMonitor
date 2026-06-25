@@ -366,3 +366,6 @@ FodyWeavers.xsd
 deploy/*
 !deploy/*.template
 !deploy/flash-app.ps1
+
+# Local nanoFramework firmware downloads/cache
+firmware-cache/
