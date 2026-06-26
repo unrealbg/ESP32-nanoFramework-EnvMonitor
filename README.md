@@ -115,7 +115,7 @@ If you test the project with other hardware, feel free to contribute feedback!
    - `mqtt.broker=your-broker-hostname`
    - `mqtt.port=1883`
    - `mqtt.tls=false`
-   - `mqtt.lwt=true`
+   - `mqtt.lwt=false`
    - `mqtt.user=yourUser`
    - `mqtt.pass=yourPass`
    - `sensor.type=SHTC3` (or `DHT21`, `AHT10`)
@@ -146,6 +146,7 @@ If you test the project with other hardware, feel free to contribute feedback!
    ```
 
    The script rebuilds the nanoFramework app, uploads the deployment image, uploads `deploy\device.config`, `deploy\credentials.txt`, and `deploy\irc_root_ca.pem`, then resets the device. The file-deployment JSON is generated automatically from the current repo path, so stale absolute paths are avoided.
+   Release is the default build configuration because the Debug deployment image can sit too close to the ESP32-S3 deployment partition limit and fail with `E2002` during managed app upload.
 
    If you intentionally want to upload only the application image, pass:
 
@@ -179,7 +180,9 @@ The MQTT publisher sends a heartbeat every 60 seconds:
 - `home/{DeviceName}/system/status/heartbeat`: `alive; status=online; freeMemory=...; wifi=connected; mqtt=connected`
 - `home/{DeviceName}/system/status`: retained `online`, refreshed on every heartbeat
 
-When `mqtt.lwt=true`, the MQTT client also registers a Last Will message so the broker can publish retained `offline` to `home/{DeviceName}/system/status` if the client disconnects unexpectedly.
+Keep `mqtt.lwt=false` when Telegram or uptime alerts use the TCP health probe. MQTT Last Will is broker-side behavior; if it is enabled, the broker can publish retained `offline` during a short MQTT reconnect even while the device and managed application are still running.
+
+Use `mqtt.lwt=true` only when the external monitor has a grace window/debounce and treats a single retained `offline` event as pending rather than immediately alerting.
 
 Detailed subsystem status is published less frequently to reduce memory and broker load:
 
@@ -725,6 +728,8 @@ Contributions are welcome! Please follow these steps to contribute:
 - Added runtime `device.config` feature gates for MQTT, IRC, health probe, web, TCP console, OTA over MQTT, and watchdog reboot behavior.
 - Added TCP health probe on port `31338` with Wi-Fi, MQTT, memory, runtime state, and watchdog diagnostics.
 - Updated MQTT availability reporting so retained `system/status=online` is refreshed on every heartbeat while Last Will can still publish `offline`.
+- Documented `mqtt.lwt=false` as the default alerting profile to avoid short broker-side offline pulses during MQTT reconnects.
+- Switched the deploy script default to Release so the managed image stays below the ESP32-S3 deployment partition limit.
 - Added a resilient IRC bot with TLS, optional CA validation, NickServ identify support, and basic sensor/relay/status commands.
 - Added deployment templates and `flash-app.ps1`; real local deploy files and `firmware-cache/` are ignored by Git.
 
