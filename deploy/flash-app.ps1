@@ -1,7 +1,7 @@
 param(
     [string]$SerialPort = "COM8",
     [string]$Target = "ESP32_S3",
-    [string]$Configuration = "Debug",
+    [string]$Configuration = "Release",
     [string]$Address = "0x1B0000",
     [ValidateSet("nanodevice", "bootloader")]
     [string]$Mode = "nanodevice",

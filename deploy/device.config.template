@@ -22,6 +22,9 @@ health.port=31338
 mqtt.broker=192.168.1.10
 mqtt.port=1883
 mqtt.tls=false
+# Keep false when Telegram/uptime alerts use the TCP health probe.
+# MQTT Last Will can create short offline pulses during broker reconnects.
+mqtt.lwt=false
 mqtt.user=
 mqtt.pass=
 
